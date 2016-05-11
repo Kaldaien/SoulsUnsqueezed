@@ -871,27 +871,42 @@ SK_DS3_CreateTexture2D (
 }
 
 void
+SK_DS3_CenterWindow (void)
+{
+  if (! __DS3_FULLSCREEN) {
+    int x_off = 0;
+    int y_off = 0;
+
+    if (__DS3_CENTER && (__DS3_MON_X > __DS3_WIDTH && __DS3_MON_Y > __DS3_HEIGHT)) {
+      x_off = (__DS3_MON_X - __DS3_WIDTH)  / 2;
+      y_off = (__DS3_MON_Y - __DS3_HEIGHT) / 2;
+    }
+
+    DWORD dwFlags = SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOSENDCHANGING;
+
+    SetWindowPos ( __DS3_WINDOW, HWND_NOTOPMOST,
+                     0+x_off, 0+y_off,
+                       __DS3_WIDTH, __DS3_HEIGHT,
+                         dwFlags );
+  }
+}
+
+void
 SK_DS3_FinishResize (void)
 {
-  if (ds3_cfg.window.borderless)
+  DWORD dwFlags = SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOSENDCHANGING;
+
+  if (ds3_cfg.window.borderless) {
     SetWindowLongW (__DS3_WINDOW, GWL_STYLE, WS_POPUP | WS_MINIMIZEBOX);
-
-  int x_off = 0;
-  int y_off = 0;
-
-  if (__DS3_CENTER && (__DS3_MON_X > 0 && __DS3_MON_Y > 0)) {
-    x_off = (__DS3_MON_X - __DS3_WIDTH)  / 2;
-    y_off = (__DS3_MON_Y - __DS3_HEIGHT) / 2;
+    dwFlags |= SWP_FRAMECHANGED;
   }
 
-  SetActiveWindow     (__DS3_WINDOW);
-  SetForegroundWindow (__DS3_WINDOW);
-  BringWindowToTop    (__DS3_WINDOW);
-
   SetWindowPos ( __DS3_WINDOW, HWND_NOTOPMOST,
-                   0+x_off, 0+y_off,
+                   0, 0,
                      __DS3_WIDTH, __DS3_HEIGHT,
-                       SWP_FRAMECHANGED | SWP_SHOWWINDOW );
+                       dwFlags );
+
+  //SK_DS3_CenterWindow ();
 }
 
 HRESULT
@@ -901,8 +916,10 @@ SK_DS3_GetFullscreenState (
   _Out_opt_ BOOL            *pFullscreen,
   _Out_opt_  IDXGIOutput   **ppTarget )
 {
-  if (! ds3_cfg.window.borderless)
-    return DXGISwap_GetFullscreenState_Original (This, pFullscreen, ppTarget);
+  if (! ds3_cfg.window.borderless) {
+    ////DXGISwap_GetFullscreenState_Original (This, pFullscreen, ppTarget);
+    ////__DS3_FULLSCREEN = *pFullscreen;
+  }
 
   if (pFullscreen != nullptr)
     *pFullscreen = __DS3_FULLSCREEN;
@@ -926,6 +943,10 @@ SK_DS3_SetFullscreenState (
 
     DXGI_OUTPUT_DESC out_desc;
 
+    // Reset the temporary monitor mode change we may have made earlier
+    if ((! __DS3_FULLSCREEN) && ds3_cfg.window.borderless && __DS3_MAX_WINDOW)
+      ChangeDisplaySettings (0, CDS_RESET);
+
     if (pTarget != nullptr)
       pTarget->GetDesc (&out_desc);
     else {
@@ -936,7 +957,7 @@ SK_DS3_SetFullscreenState (
 
       GetMonitorInfo ( MonitorFromWindow (swap_desc.OutputWindow, MONITOR_DEFAULTTOPRIMARY),
                          &minfo );
-      out_desc.DesktopCoordinates = minfo.rcWork;
+      out_desc.DesktopCoordinates = minfo.rcMonitor;// rcWork;
     }
 
     const RECT& krcDesktop = out_desc.DesktopCoordinates;
@@ -963,18 +984,16 @@ SK_DS3_SetFullscreenState (
           __DS3_MON_X = swap_desc.BufferDesc.Width;
           __DS3_MON_Y = swap_desc.BufferDesc.Height;
         }
-      } else {
-        ChangeDisplaySettings (0, CDS_RESET);
-
-        __DS3_MON_X = out_desc.DesktopCoordinates.right  - out_desc.DesktopCoordinates.left;
-        __DS3_MON_Y = out_desc.DesktopCoordinates.bottom - out_desc.DesktopCoordinates.top;
       }
     }
   }
 
-  if (ds3_cfg.window.borderless) {
+  //if (! __DS3_FULLSCREEN)
     //SK_DS3_FinishResize ();
 
+  //SK_DS3_CenterWindow ();
+
+  if (ds3_cfg.window.borderless) {
     HRESULT ret = S_OK;
     //DXGI_CALL (ret, (S_OK))
     return ret;
@@ -1008,7 +1027,7 @@ SK_DS3_ResizeBuffers (IDXGISwapChain *This,
     if (Height != 0)
       __DS3_HEIGHT = Height;
 
-    //SK_DS3_FinishResize ();
+    SK_DS3_CenterWindow ();
   }
 
   return hr;
@@ -1024,8 +1043,15 @@ SK_DS3_ResizeTarget ( IDXGISwapChain *This,
   HRESULT ret =
     DXGISwap_ResizeTarget_Original (This, pNewTargetParameters);
 
-  if (SUCCEEDED (ret) && (ds3_cfg.window.borderless || ((! __DS3_FULLSCREEN) && __DS3_CENTER))) {
-    SK_DS3_FinishResize ();
+  if (SUCCEEDED (ret)) {//s && (ds3_cfg.window.borderless || (__DS3_CENTER))) {
+    if (pNewTargetParameters->Width > 0)
+      __DS3_WIDTH = pNewTargetParameters->Width;
+
+    if (pNewTargetParameters->Height > 0)
+      __DS3_HEIGHT = pNewTargetParameters->Height;
+
+    if (ds3_cfg.window.borderless || (! __DS3_FULLSCREEN))
+      SK_DS3_FinishResize ();
 
     //DXGISwap_ResizeBuffers_Override (This, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0x02);
   }
@@ -1147,7 +1173,10 @@ SK_DS3_PresentFirstFrame ( IDXGISwapChain *This,
     DXGISwap_SetFullscreenState_Override (This, TRUE,  nullptr);
   }
 
-  SK_DS3_FinishResize ();
+  if (ds3_cfg.window.borderless || (! __DS3_FULLSCREEN))
+    SK_DS3_FinishResize ();
+
+  SK_DS3_CenterWindow ();
 
   ////DXGISwap_ResizeBuffers_Original (This, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
 
