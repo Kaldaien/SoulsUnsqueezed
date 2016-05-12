@@ -1,4 +1,4 @@
-#include <string>
+#include <string> 
 
 #include "ini.h"
 #include "parameter.h"
@@ -16,6 +16,9 @@ static ShutdownPlugin_pfn BMF_ShutdownCore_Original = nullptr;
 extern "C" bool WINAPI SK_DS3_ShutdownPlugin (const wchar_t *);
 
 
+///////////////////////////////////////////
+// WinAPI Hooks
+///////////////////////////////////////////
 typedef int (WINAPI *GetSystemMetrics_pfn)(
   _In_ int nIndex
 );
@@ -26,8 +29,24 @@ typedef BOOL (WINAPI *EnumDisplaySettingsA_pfn)(
   _Out_ DEVMODEA *lpDevMode
 );
 
+typedef BOOL (WINAPI *SetWindowPos_pfn)(
+  _In_     HWND hWnd,
+  _In_opt_ HWND hWndInsertAfter,
+  _In_     int  X,
+  _In_     int  Y,
+  _In_     int  cx,
+  _In_     int  cy,
+  _In_     UINT uFlags
+);
+typedef HWND (WINAPI *SetActiveWindow_pfn)(
+  HWND hWnd 
+);
+
+
 GetSystemMetrics_pfn     GetSystemMetrics_Original     = nullptr;
 EnumDisplaySettingsA_pfn EnumDisplaySettingsA_Original = nullptr;
+SetWindowPos_pfn         SetWindowPos_Original         = nullptr;
+SetActiveWindow_pfn      SetActiveWindow_Original      = nullptr;
 
 #include <d3d11.h>
 
@@ -165,38 +184,52 @@ SK_DS3_PluginKeyPress ( BOOL Control,
 
 bmf::ParameterFactory ds3_factory;
 
-bmf::INI::File*       ds3_prefs         = nullptr;
+bmf::INI::File*       ds3_prefs            = nullptr;
 
-bmf::ParameterInt*    ds3_hud_res_x     = nullptr;
-bmf::ParameterInt*    ds3_hud_res_y     = nullptr;
-bmf::ParameterInt*    ds3_hud_offset_x  = nullptr;
-bmf::ParameterInt*    ds3_hud_offset_y  = nullptr;
-bmf::ParameterBool*   ds3_hud_stretch   = nullptr;
+bmf::ParameterInt*    ds3_hud_res_x        = nullptr;
+bmf::ParameterInt*    ds3_hud_res_y        = nullptr;
+bmf::ParameterInt*    ds3_hud_offset_x     = nullptr;
+bmf::ParameterInt*    ds3_hud_offset_y     = nullptr;
+bmf::ParameterBool*   ds3_hud_stretch      = nullptr;
 
-bmf::ParameterInt*    ds3_default_res_x  = nullptr;
-bmf::ParameterInt*    ds3_default_res_y  = nullptr;
-bmf::ParameterInt*    ds3_sacrificial_x  = nullptr;
-bmf::ParameterInt*    ds3_sacrificial_y  = nullptr;
+bmf::ParameterInt*    ds3_default_res_x    = nullptr;
+bmf::ParameterInt*    ds3_default_res_y    = nullptr;
+bmf::ParameterInt*    ds3_sacrificial_x    = nullptr;
+bmf::ParameterInt*    ds3_sacrificial_y    = nullptr;
 
-bmf::ParameterBool*   ds3_fullscreen    = nullptr;
-bmf::ParameterBool*   ds3_borderless    = nullptr;
-bmf::ParameterBool*   ds3_center        = nullptr;
+bmf::ParameterBool*   ds3_fullscreen       = nullptr;
+bmf::ParameterBool*   ds3_borderless       = nullptr;
+bmf::ParameterBool*   ds3_center           = nullptr;
 
-bmf::ParameterBool*   ds3_flip_mode     = nullptr;
+bmf::ParameterBool*   ds3_start_fullscreen = nullptr;
+
+bmf::ParameterBool*   ds3_flip_mode        = nullptr;
 
 
-// VERY BAD (no) DESIGN, move this stuff completely into plugin_ds3.cpp
-bool __DS3_FULLSCREEN = false;
+struct ds3_state_s {
+  IDXGISwapChain* SwapChain  = nullptr;
 
-bool __DS3_CENTER     = false;
-bool __DS3_MAX_WINDOW = false;
-HWND __DS3_WINDOW     = 0;
+  bool            Fullscreen = false;
+  HWND            Window     = 0;
 
-int  __DS3_WIDTH  = 0;
-int  __DS3_HEIGHT = 0;
+  int             Width      = 0;
+  int             Height     = 0;
 
-int  __DS3_MON_X = 0;
-int  __DS3_MON_Y = 0;
+  struct monitor_s {
+    int           Width     = 0;
+    int           Height    = 0;
+  } monitor;
+} ds3_state;
+
+
+int* __DS3_WIDTH  = nullptr;
+int* __DS3_HEIGHT = nullptr;
+
+
+struct sus_state_s {
+  bool Center     = false;
+  bool MaxWindow  = false;
+} sus_state;
 
 
 struct {
@@ -209,6 +242,7 @@ struct {
   } hud;
 
   struct {
+    bool fullscreen  = false; // Forcefully start in fullscreen
     bool flip_mode   = false;
     int  res_x       = 1920;
     int  res_y       = 1080;
@@ -237,7 +271,7 @@ extern void
 __stdcall
 SK_SetPluginName (std::wstring name);
 
-#define SUS_VERSION_NUM L"0.2.0"
+#define SUS_VERSION_NUM L"0.2.1"
 #define SUS_VERSION_STR L"Souls Unsqueezed v " SUS_VERSION_NUM
 
 void*
@@ -366,145 +400,101 @@ SK_InjectMachineCode ( LPVOID   base_addr,
     SK_FlushInstructionCache (base_addr, code_size);
 }
 
+struct monitor_dims_s {
+  std::pair <int, int> work;
+  std::pair <int, int> full;
+};
 
-#if 0
-BOOL
-WINAPI
-EnumDisplaySettingsA_Detour ( _In_  LPCSTR    lpszDeviceName,
-                              _In_  DWORD     iModeNum,
-                              _Out_ DEVMODEA* lpDevMode )
+monitor_dims_s
+SK_DS3_GetMonitorDims (void)
 {
-  //dll_log.Log ( L"[Resolution] EnumDisplaySettingsA (%hs, %lu, %ph)",
-                  //lpszDeviceName, iModeNum, lpDevMode );
+  monitor_dims_s dims;
 
-  if (config.display.match_desktop) {
-    if (iModeNum == 0)
-      return EnumDisplaySettingsA_Original (lpszDeviceName, ENUM_CURRENT_SETTINGS, lpDevMode);
+  MONITORINFO minfo = { 0 };
+  minfo.cbSize      = sizeof MONITORINFO;
 
-    EnumDisplaySettingsA_Original (lpszDeviceName, ENUM_CURRENT_SETTINGS, lpDevMode);
+  GetMonitorInfo ( MonitorFromWindow ( ds3_state.Window,
+                                         MONITOR_DEFAULTTOPRIMARY ),
+                     &minfo );
 
-    return 0;
+  ds3_state.monitor.Width  = minfo.rcMonitor.right  - minfo.rcMonitor.left;
+  ds3_state.monitor.Height = minfo.rcMonitor.bottom - minfo.rcMonitor.top;
+
+  dims.full.first  = ds3_state.monitor.Width;
+  dims.full.second = ds3_state.monitor.Height;
+
+  dims.work.first  = minfo.rcWork.right  - minfo.rcWork.left;
+  dims.work.second = minfo.rcWork.bottom - minfo.rcWork.top;
+
+  return dims;
+}
+void
+SK_DS3_CenterWindow (void)
+{
+  SK_DS3_GetMonitorDims ();
+
+  if (! sus_state.Center)
+    return;
+
+  dll_log.Log ( L"[!] SK_DS3_CenterWindow (void) -- [Calling Thread: 0x%04x]",
+                  GetCurrentThreadId () );
+  dll_log.Log ( L"\tMonitor: [%lux%lu] <-> Window: [%lux%lu] :: { %s }, <HWND: 0x%04X>",
+                  ds3_state.monitor.Width, ds3_state.monitor.Height,
+                    ds3_state.Width, ds3_state.Height,
+                      ds3_state.Fullscreen ? L"Fullscreen" : L"Windowed",
+                        ds3_state.Window );
+
+  if ((! ds3_state.Fullscreen) || ds3_cfg.window.borderless) {
+    int x_off = 0;
+    int y_off = 0;
+
+    if ( ds3_state.monitor.Width  > ds3_state.Width &&
+         ds3_state.monitor.Height > ds3_state.Height ) {
+      x_off = (ds3_state.monitor.Width  - ds3_state.Width)  / 2;
+      y_off = (ds3_state.monitor.Height - ds3_state.Height) / 2;
+    }
+
+    DWORD dwFlags = SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER;
+
+    //SetActiveWindow_Original (ds3_state.Window);
+    BringWindowToTop         (ds3_state.Window);
+    SetForegroundWindow      (ds3_state.Window);
+
+    SetWindowPos_Original (
+      ds3_state.Window, HWND_TOP,
+        0 + x_off, 0 + y_off,
+          ds3_state.Width, ds3_state.Height,
+            dwFlags
+    );
   }
-
-  return EnumDisplaySettingsA_Original (lpszDeviceName, iModeNum, lpDevMode);
 }
 
-typedef LONG (WINAPI *ChangeDisplaySettingsA_pfn)(DEVMODEA* dontcare, DWORD dwFlags);
-ChangeDisplaySettingsA_pfn ChangeDisplaySettingsA_Original = nullptr;
-
-LONG
-WINAPI
-ChangeDisplaySettingsA_Detour (DEVMODEA* dontcare, DWORD dwFlags)
+void
+SK_DS3_FinishResize (void)
 {
-  bool override = false;
+  DWORD dwFlags = SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSENDCHANGING;
 
-  if (dontcare != nullptr)
-    dll_log.LogEx ( true, L"[Resolution] ChangeDisplaySettingsA - %4lux%-4lu@%#2lu Hz",
-                      dontcare->dmPelsWidth, dontcare->dmPelsHeight,
-                        dontcare->dmDisplayFrequency );
-  else {
-    dll_log.LogEx (true, L"[Resolution] ChangeDisplaySettingsA - RESET");
+  if (ds3_cfg.window.borderless) {
+    SetWindowLongW (ds3_state.Window, GWL_STYLE, WS_POPUP | WS_MINIMIZEBOX);
+    dwFlags |= SWP_FRAMECHANGED;
   }
 
-  if (config.display.match_desktop) {
-    override = true;
+  //SetActiveWindow_Original (ds3_state.Window);
+  BringWindowToTop    (ds3_state.Window);
+  SetForegroundWindow (ds3_state.Window);
 
-    dll_log.LogEx (false, L" { Override: Desktop }\n");
+  dwFlags |= SWP_NOZORDER;
 
-    //
-    // Fix Display Scaling Problems
-    //
-    if ( dontcare != nullptr && dwFlags & CDS_TEST &&
-         (dontcare->dmPelsWidth  != GetSystemMetrics_Original (SM_CXSCREEN) ||
-          dontcare->dmPelsHeight != GetSystemMetrics_Original (SM_CYSCREEN)) ) {
-      return DISP_CHANGE_FAILED;
-    }
+  SetWindowPos_Original (
+    ds3_state.Window, HWND_TOP,
+      0, 0,
+        ds3_state.Width, ds3_state.Height,
+          dwFlags
+  );
 
-    return DISP_CHANGE_SUCCESSFUL;
-  }
-
-  if ( dontcare != nullptr && ( config.display.height  > 0 ||
-                                config.display.width   > 0 ||
-                                config.display.refresh > 0 ||
-                                config.display.monitor > 0 ) ) {
-    override = true;
-
-    LONG ret = -1;
-
-    int width   = dontcare->dmPelsWidth;
-    int height  = dontcare->dmPelsHeight;
-    int refresh = dontcare->dmDisplayFrequency;
-    int monitor = 0;
-
-    int test_width  = width;
-    int test_height = height;
-
-    if (config.display.height > 0) {
-      height                 = config.display.height;
-      dontcare->dmFields    |= DM_PELSHEIGHT;
-      dontcare->dmPelsHeight = height;
-    }
-
-    if (config.display.width > 0) {
-      width                 = config.display.width;
-      dontcare->dmFields   |= DM_PELSWIDTH;
-      dontcare->dmPelsWidth = width;
-    }
-
-    if (config.display.width > 0) {
-      refresh                      = config.display.refresh;
-      dontcare->dmFields          |= DM_DISPLAYFREQUENCY;
-      dontcare->dmDisplayFrequency = refresh;
-    }
-
-    if (config.display.monitor > 0) {
-      monitor = config.display.monitor;
-
-      DISPLAY_DEVICEA dev = { 0 };
-      dev.cb = sizeof DISPLAY_DEVICEA;
-
-      if (EnumDisplayDevicesA (nullptr, monitor, &dev, 0x00)) {
-        ret =
-          ChangeDisplaySettingsExA ( dev.DeviceString,
-                                       dontcare,
-                                         NULL,
-                                           dwFlags,
-                                             nullptr );
-
-#if 0
-       DEVMODEA settings;
-       settings.dmSize = sizeof DEVMODEA;
-       EnumDisplaySettingsExA (dev.DeviceName,
-                               ENUM_CURRENT_SETTINGS,
-                               &settings,
-                               EDS_ROTATEDMODE);
-#endif
-      }
-    }
-
-    dll_log.LogEx ( false, L" { Override: %4lux%-4lu@%#2luHz on"
-                           L" Monitor %lu }\n",
-                      width, height, refresh, monitor );
-
-    //
-    // Fix Display Scaling Problems
-    //
-    if ( dontcare != nullptr && dwFlags & CDS_TEST &&
-         (test_width  != width ||
-          test_height != height) ) {
-      return DISP_CHANGE_FAILED;
-    }
-
-    if (! ret)
-      return ret;
-  }
-
-  if (! override)
-    dll_log.LogEx (false, L"\n");
-
-  return ChangeDisplaySettingsA_Original (dontcare, dwFlags);
+  //SK_DS3_CenterWindow ();
 }
-#endif
+
 
 int
 WINAPI
@@ -547,9 +537,57 @@ GetSystemMetrics_Detour (_In_ int nIndex)
   return nRet;
 }
 
+BOOL
+WINAPI
+SK_DS3_SetWindowPos (
+  _In_     HWND hWnd,
+  _In_opt_ HWND hWndInsertAfter,
+  _In_     int  X,
+  _In_     int  Y,
+  _In_     int  cx,
+  _In_     int  cy,
+  _In_     UINT uFlags )
+{
+  return TRUE;
+}
+
+HWND
+WINAPI
+SK_DS3_SetActiveWindow (
+  HWND hWnd )
+{
+  HWND hWndRet = hWnd;
+
+  if (hWnd == ds3_state.Window) {
+    if (ds3_cfg.window.borderless || (! ds3_state.Fullscreen)) {
+      SK_DS3_FinishResize ();
+      SK_DS3_CenterWindow ();
+    }
+  }
+
+  hWndRet =
+    SetActiveWindow_Original (hWnd);
+
+  //if (ds3_state.Fullscreen)
+    //DXGISwap_SetFullscreenState_Original (ds3_state.SwapChain, TRUE, nullptr);
+
+
+  return hWndRet;
+}
+
+
+
 void
 BMF_DS3_InitPlugin (void)
 {
+  SetProcessDPIAware ();
+
+  __DS3_WIDTH  = &ds3_state.Width;
+  __DS3_HEIGHT = &ds3_state.Height;
+
+  ds3_state.Width  = ds3_cfg.render.res_x;
+  ds3_state.Height = ds3_cfg.render.res_y;
+
   if (ds3_prefs == nullptr) {
     // Make the graphics config file read-only while running
     DWORD    dwConfigAttribs;
@@ -636,6 +674,16 @@ BMF_DS3_InitPlugin (void)
   if (ds3_flip_mode->load ())
     ds3_cfg.render.flip_mode = ds3_flip_mode->get_value ();
 
+  ds3_start_fullscreen =
+    static_cast <bmf::ParameterBool *>
+      (ds3_factory.create_parameter <bool> (L"Start in Fullscreen"));
+  ds3_start_fullscreen->register_to_ini ( ds3_prefs,
+                                            L"SUS.Render",
+                                              L"StartFullscreen" );
+
+  if (ds3_start_fullscreen->load ())
+    ds3_cfg.render.fullscreen = ds3_start_fullscreen->get_value ();
+
 
   ds3_borderless =
     static_cast <bmf::ParameterBool *>
@@ -658,8 +706,7 @@ BMF_DS3_InitPlugin (void)
   if (ds3_fullscreen->load ()) {
     ds3_cfg.window.fullscreen = ds3_fullscreen->get_value ();
 
-    // TEMP HACK
-    __DS3_MAX_WINDOW = ds3_cfg.window.fullscreen;
+    sus_state.MaxWindow = ds3_cfg.window.fullscreen;
   }
 
 
@@ -673,8 +720,7 @@ BMF_DS3_InitPlugin (void)
   if (ds3_center->load ()) {
     ds3_cfg.window.center = ds3_center->get_value ();
 
-    // TEMP HACK
-    __DS3_CENTER = ds3_cfg.window.center;
+    sus_state.Center = ds3_cfg.window.center;
   }
 
 
@@ -754,6 +800,16 @@ BMF_DS3_InitPlugin (void)
                        GetSystemMetrics_Detour,
             (LPVOID *)&GetSystemMetrics_Original );
 #endif
+
+  BMF_CreateDLLHook ( L"user32.dll",
+                      "SetWindowPos",
+                       SK_DS3_SetWindowPos,
+            (LPVOID *)&SetWindowPos_Original );
+
+    BMF_CreateDLLHook ( L"user32.dll",
+                      "SetActiveWindow",
+                       SK_DS3_SetActiveWindow,
+            (LPVOID *)&SetActiveWindow_Original );
 
   BMF_CreateFuncHook ( L"ID3D11DeviceContext::RSSetViewports",
                          D3D11_RSSetViewports_Override,
@@ -870,45 +926,6 @@ SK_DS3_CreateTexture2D (
   return hr;
 }
 
-void
-SK_DS3_CenterWindow (void)
-{
-  if (! __DS3_FULLSCREEN) {
-    int x_off = 0;
-    int y_off = 0;
-
-    if (__DS3_CENTER && (__DS3_MON_X > __DS3_WIDTH && __DS3_MON_Y > __DS3_HEIGHT)) {
-      x_off = (__DS3_MON_X - __DS3_WIDTH)  / 2;
-      y_off = (__DS3_MON_Y - __DS3_HEIGHT) / 2;
-    }
-
-    DWORD dwFlags = SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOSENDCHANGING;
-
-    SetWindowPos ( __DS3_WINDOW, HWND_NOTOPMOST,
-                     0+x_off, 0+y_off,
-                       __DS3_WIDTH, __DS3_HEIGHT,
-                         dwFlags );
-  }
-}
-
-void
-SK_DS3_FinishResize (void)
-{
-  DWORD dwFlags = SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOSENDCHANGING;
-
-  if (ds3_cfg.window.borderless) {
-    SetWindowLongW (__DS3_WINDOW, GWL_STYLE, WS_POPUP | WS_MINIMIZEBOX);
-    dwFlags |= SWP_FRAMECHANGED;
-  }
-
-  SetWindowPos ( __DS3_WINDOW, HWND_NOTOPMOST,
-                   0, 0,
-                     __DS3_WIDTH, __DS3_HEIGHT,
-                       dwFlags );
-
-  //SK_DS3_CenterWindow ();
-}
-
 HRESULT
 STDMETHODCALLTYPE
 SK_DS3_GetFullscreenState (
@@ -916,15 +933,24 @@ SK_DS3_GetFullscreenState (
   _Out_opt_ BOOL            *pFullscreen,
   _Out_opt_  IDXGIOutput   **ppTarget )
 {
+  HRESULT hr = S_OK;
+
   if (! ds3_cfg.window.borderless) {
-    ////DXGISwap_GetFullscreenState_Original (This, pFullscreen, ppTarget);
-    ////__DS3_FULLSCREEN = *pFullscreen;
+    BOOL bFullscreen = TRUE;
+
+    hr =
+      DXGISwap_GetFullscreenState_Original (This, &bFullscreen, ppTarget);
+
+    //if (SUCCEEDED (hr))
+    ds3_state.Fullscreen = bFullscreen;
+  } else {
+    DXGISwap_GetFullscreenState_Original (This, nullptr, ppTarget);
   }
 
   if (pFullscreen != nullptr)
-    *pFullscreen = __DS3_FULLSCREEN;
+    *pFullscreen = ds3_state.Fullscreen;
 
-  return S_OK;
+  return S_OK;// hr;
   //return DXGISwap_GetFullscreenState_Original (This, nullptr, nullptr);
 }
 
@@ -935,37 +961,27 @@ SK_DS3_SetFullscreenState (
   _In_ BOOL            Fullscreen,
   _In_ IDXGIOutput    *pTarget )
 {
-  __DS3_FULLSCREEN = Fullscreen;
+  // Hack to handle artificially generated Alt+Enter sequences
+  keybd_event (VK_LMENU,  0, KEYEVENTF_KEYUP, 0);
+  keybd_event (VK_RETURN, 0, KEYEVENTF_KEYUP, 0);
+
+  // No need to check if the mode switch actually worked, we're faking it
+  if (ds3_cfg.window.borderless)
+    ds3_state.Fullscreen = Fullscreen;
+
+  ds3_state.SwapChain  = This;
 
   DXGI_SWAP_CHAIN_DESC swap_desc;
   if (SUCCEEDED (This->GetDesc (&swap_desc))) {
-    __DS3_WINDOW = swap_desc.OutputWindow;
+    ds3_state.Window = swap_desc.OutputWindow;
 
     DXGI_OUTPUT_DESC out_desc;
 
     // Reset the temporary monitor mode change we may have made earlier
-    if ((! __DS3_FULLSCREEN) && ds3_cfg.window.borderless && __DS3_MAX_WINDOW)
+    if ((! ds3_state.Fullscreen) && ds3_cfg.window.borderless && sus_state.MaxWindow)
       ChangeDisplaySettings (0, CDS_RESET);
 
-    if (pTarget != nullptr)
-      pTarget->GetDesc (&out_desc);
-    else {
-      // pTarget is often NULL, so just fill-in the handfull of necessary parameters with
-      //   values from the monitor belonging to the window.
-      MONITORINFO minfo = { 0 };
-      minfo.cbSize      = sizeof MONITORINFO;
-
-      GetMonitorInfo ( MonitorFromWindow (swap_desc.OutputWindow, MONITOR_DEFAULTTOPRIMARY),
-                         &minfo );
-      out_desc.DesktopCoordinates = minfo.rcMonitor;// rcWork;
-    }
-
-    const RECT& krcDesktop = out_desc.DesktopCoordinates;
-
-    __DS3_MON_X = out_desc.DesktopCoordinates.right  - out_desc.DesktopCoordinates.left;
-    __DS3_MON_Y = out_desc.DesktopCoordinates.bottom - out_desc.DesktopCoordinates.top;
-
-    if (ds3_cfg.window.borderless && __DS3_MAX_WINDOW) {
+    if (ds3_cfg.window.borderless && sus_state.MaxWindow) {
       DEVMODE devmode = { 0 };
       devmode.dmSize = sizeof DEVMODE;
       EnumDisplaySettings (nullptr, ENUM_CURRENT_SETTINGS, &devmode);
@@ -974,32 +990,41 @@ SK_DS3_SetFullscreenState (
       //   bother with viewport hacks at the moment.
       //
       //  XXX: Later on, we can restore the game's usual viewport hackery.
-      if (__DS3_FULLSCREEN) {
+      if (ds3_state.Fullscreen) {
         if (devmode.dmPelsHeight != swap_desc.BufferDesc.Height ||
             devmode.dmPelsWidth  != swap_desc.BufferDesc.Width) {
           devmode.dmPelsWidth  = swap_desc.BufferDesc.Width;
           devmode.dmPelsHeight = swap_desc.BufferDesc.Height;
+
           ChangeDisplaySettings (&devmode, CDS_FULLSCREEN);
 
-          __DS3_MON_X = swap_desc.BufferDesc.Width;
-          __DS3_MON_Y = swap_desc.BufferDesc.Height;
+          ds3_state.monitor.Width  = swap_desc.BufferDesc.Width;
+          ds3_state.monitor.Height = swap_desc.BufferDesc.Height;
         }
       }
     }
   }
 
-  //if (! __DS3_FULLSCREEN)
-    //SK_DS3_FinishResize ();
-
-  //SK_DS3_CenterWindow ();
-
   if (ds3_cfg.window.borderless) {
+    SK_DS3_FinishResize ();
+    SK_DS3_CenterWindow ();
+
     HRESULT ret = S_OK;
     //DXGI_CALL (ret, (S_OK))
     return ret;
   }
 
-  return DXGISwap_SetFullscreenState_Original (This, Fullscreen, pTarget);
+  bool original_state  = ds3_state.Fullscreen;
+  ds3_state.Fullscreen = Fullscreen;
+
+  HRESULT ret =
+    DXGISwap_SetFullscreenState_Original (This, Fullscreen, pTarget);
+
+  if (! SUCCEEDED (ret))
+    ds3_state.Fullscreen = original_state;
+//  SK_DS3_CenterWindow   ();
+
+  return ret;
 }
 
 COM_DECLSPEC_NOTHROW
@@ -1022,10 +1047,10 @@ SK_DS3_ResizeBuffers (IDXGISwapChain *This,
 
   if (SUCCEEDED (hr)) {
     if (Width != 0)
-      __DS3_WIDTH  = Width;
+      ds3_state.Width  = Width;
 
     if (Height != 0)
-      __DS3_HEIGHT = Height;
+      ds3_state.Height = Height;
 
     SK_DS3_CenterWindow ();
   }
@@ -1043,15 +1068,19 @@ SK_DS3_ResizeTarget ( IDXGISwapChain *This,
   HRESULT ret =
     DXGISwap_ResizeTarget_Original (This, pNewTargetParameters);
 
-  if (SUCCEEDED (ret)) {//s && (ds3_cfg.window.borderless || (__DS3_CENTER))) {
-    if (pNewTargetParameters->Width > 0)
-      __DS3_WIDTH = pNewTargetParameters->Width;
+  if (SUCCEEDED (ret)) {
+    if (pNewTargetParameters != nullptr) {
+      if (pNewTargetParameters->Width > 0)
+        ds3_state.Width = pNewTargetParameters->Width;
 
-    if (pNewTargetParameters->Height > 0)
-      __DS3_HEIGHT = pNewTargetParameters->Height;
+      if (pNewTargetParameters->Height > 0)
+        ds3_state.Height = pNewTargetParameters->Height;
+    }
 
-    if (ds3_cfg.window.borderless || (! __DS3_FULLSCREEN))
+    if (ds3_cfg.window.borderless || (! ds3_state.Fullscreen))
       SK_DS3_FinishResize ();
+
+    SK_DS3_CenterWindow ();
 
     //DXGISwap_ResizeBuffers_Override (This, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0x02);
   }
@@ -1087,6 +1116,9 @@ SK_DS3_RSSetViewports ( ID3D11DeviceContext* This,
         //(pViewports [i].TopLeftX != 0.0f && pViewports [i].Width  == (float)__DS3_WIDTH  + (-2.0f * pViewports [i].TopLeftX)) );
 
 
+    float aspect0 = pViewports [i].Width   / pViewports [i].Height;
+    float aspect1 = (float)ds3_state.Width / (float)ds3_state.Height;
+
     if (pViewports [i].Width == 1280.0f && pViewports [i].Height == 720.0f &&
         pViewports [i].MinDepth == 0.0f && pViewports [i].MaxDepth == 0.0f) {
       pNewViewports [i].TopLeftX = (float)ds3_cfg.hud.offset_x;
@@ -1096,31 +1128,36 @@ SK_DS3_RSSetViewports ( ID3D11DeviceContext* This,
     }
 
     else if (ds3_cfg.hud.stretch &&
-             (((pViewports [i].MinDepth == pViewports [i].MaxDepth) &&
-                pViewports [i].Width  > (float)__DS3_WIDTH  - 4.0f &&
-                pViewports [i].Width  < (float)__DS3_WIDTH  + 4.0f &&
-                pViewports [i].Height > (float)__DS3_HEIGHT - 4.0f &&
-                pViewports [i].Height < (float)__DS3_HEIGHT + 4.0f) ||
+             (((pViewports [i].MinDepth == pViewports [i].MaxDepth && pViewports [i].MinDepth == 0.0f) &&
+#if 1
+               fabs (aspect0 - aspect1) <  0.1f
+#else
+                pViewports [i].Width  > (float)ds3_state.Width  - 4.0f &&
+                pViewports [i].Width  < (float)ds3_state.Width  + 4.0f &&
+                pViewports [i].Height > (float)ds3_state.Height - 4.0f &&
+                pViewports [i].Height < (float)ds3_state.Height + 4.0f
+#endif
+               ) ||
                (incorrectly_centered))) {
-      if ((float)__DS3_WIDTH / (float)__DS3_HEIGHT >= (16.0f / 9.0f)) {
-        float rescaled_width = pNewViewports [i].Width * ((float)__DS3_WIDTH / (float)__DS3_HEIGHT) / (16.0f / 9.0f);
+      if ((float)ds3_state.Width / (float)ds3_state.Height >= (16.0f / 9.0f)) {
+        float rescaled_width = pNewViewports [i].Width * ((float)ds3_state.Width / (float)ds3_state.Height) / (16.0f / 9.0f);
         float excess_width   = rescaled_width - pNewViewports [i].Width;
 
-        pNewViewports [i].Width    *= ((float)__DS3_WIDTH / (float)__DS3_HEIGHT) / (16.0f / 9.0f);
-        pNewViewports [i].Height   = __DS3_HEIGHT;
+        pNewViewports [i].Width    *= ((float)ds3_state.Width / (float)ds3_state.Height) / (16.0f / 9.0f);
+        pNewViewports [i].Height   = ds3_state.Height;
         pNewViewports [i].TopLeftX = -excess_width / 2.0f;
         pNewViewports [i].TopLeftY = 0.0f;
       } else {
-        float rescaled_height = pNewViewports [i].Height * (16.0f / 9.0f) / ((float)__DS3_WIDTH / (float)__DS3_HEIGHT);
+        float rescaled_height = pNewViewports [i].Height * (16.0f / 9.0f) / ((float)ds3_state.Width / (float)ds3_state.Height);
         float excess_height   = rescaled_height - pNewViewports [i].Height;
 
-        pNewViewports [i].Width    = __DS3_WIDTH;
-        pNewViewports [i].Height   *= (16.0f / 9.0f) / ((float)__DS3_WIDTH / (float)__DS3_HEIGHT);
+        pNewViewports [i].Width    = ds3_state.Width;
+        pNewViewports [i].Height   *= (16.0f / 9.0f) / ((float)ds3_state.Width / (float)ds3_state.Height);
         pNewViewports [i].TopLeftX = 0.0f;
         pNewViewports [i].TopLeftY = -excess_height / 2.0f;
       }
-      pNewViewports [i].MinDepth = 0.0f;
-      pNewViewports [i].MaxDepth = 0.0f;
+      pNewViewports [i].MinDepth = pViewports [i].MaxDepth;
+      pNewViewports [i].MaxDepth = pViewports [i].MaxDepth;
     }
 
 #if 0
@@ -1161,22 +1198,30 @@ SK_DS3_PresentFirstFrame ( IDXGISwapChain *This,
                            UINT            SyncInterval,
                            UINT            Flags )
 {
+  static bool first = true;
+
   DXGI_SWAP_CHAIN_DESC desc;
   This->GetDesc (&desc);
 
-  __DS3_WIDTH  = desc.BufferDesc.Width;
-  __DS3_HEIGHT = desc.BufferDesc.Height;
+  ds3_state.SwapChain = This;
+  ds3_state.Window    = desc.OutputWindow;
 
-  if (ds3_cfg.window.borderless || (! __DS3_FULLSCREEN)) {
-    DXGISwap_SetFullscreenState_Override (This, FALSE, nullptr);
-  } else {
-    DXGISwap_SetFullscreenState_Override (This, TRUE,  nullptr);
+  if (first) {
+    first = false;
+
+    //
+    // Engage Fullscreen Mode At Startup (ARC Hack)
+    //
+    if (ds3_cfg.render.fullscreen) {
+      keybd_event (VK_LMENU,  0, KEYEVENTF_EXTENDEDKEY, 0);
+      keybd_event (VK_RETURN, 0, KEYEVENTF_EXTENDEDKEY, 0);
+    }
   }
 
-  if (ds3_cfg.window.borderless || (! __DS3_FULLSCREEN))
+  if (ds3_cfg.window.borderless || (! ds3_state.Fullscreen)) {
     SK_DS3_FinishResize ();
-
-  SK_DS3_CenterWindow ();
+    SK_DS3_CenterWindow ();
+  }
 
   ////DXGISwap_ResizeBuffers_Original (This, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
 
