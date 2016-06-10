@@ -12,16 +12,15 @@
 // Hook Special K's shutdown function
 //
 typedef bool (WINAPI *ShutdownPlugin_pfn)(const wchar_t *);
-static ShutdownPlugin_pfn BMF_ShutdownCore_Original = nullptr;
+static ShutdownPlugin_pfn SK_ShutdownCore_Original = nullptr;
 extern "C" bool WINAPI SK_DS3_ShutdownPlugin (const wchar_t *);
-
 
 ///////////////////////////////////////////
 // WinAPI Hooks
 ///////////////////////////////////////////
-typedef int (WINAPI *GetSystemMetrics_pfn)(
-  _In_ int nIndex
-);
+//typedef int (WINAPI *GetSystemMetrics_pfn)(
+//  _In_ int nIndex
+//);
 
 typedef BOOL (WINAPI *EnumDisplaySettingsA_pfn)(
   _In_  LPCSTR    lpszDeviceName,
@@ -43,7 +42,7 @@ typedef HWND (WINAPI *SetActiveWindow_pfn)(
 );
 
 
-GetSystemMetrics_pfn     GetSystemMetrics_Original     = nullptr;
+//GetSystemMetrics_pfn     GetSystemMetrics_Original     = nullptr;
 EnumDisplaySettingsA_pfn EnumDisplaySettingsA_Original = nullptr;
 SetWindowPos_pfn         SetWindowPos_Original         = nullptr;
 SetActiveWindow_pfn      SetActiveWindow_Original      = nullptr;
@@ -83,18 +82,18 @@ typedef HRESULT (STDMETHODCALLTYPE *DXGISwap_SetFullscreenState_pfn)(
     _Out_ IDXGIOutput    *pTarget
 );
 
-static D3D11_RSSetViewports_pfn        D3D11_RSSetViewports_Original        = nullptr;
+D3D11_RSSetViewports_pfn        D3D11_RSSetViewports_Original        = nullptr;
 
-static DXGISwap_ResizeTarget_pfn       DXGISwap_ResizeTarget_Original       = nullptr;
-static DXGISwap_ResizeBuffers_pfn      DXGISwap_ResizeBuffers_Original      = nullptr;
-static DXGISwap_GetFullscreenState_pfn DXGISwap_GetFullscreenState_Original = nullptr;
-static DXGISwap_SetFullscreenState_pfn DXGISwap_SetFullscreenState_Original = nullptr;
+DXGISwap_ResizeTarget_pfn       DXGISwap_ResizeTarget_Original       = nullptr;
+DXGISwap_ResizeBuffers_pfn      DXGISwap_ResizeBuffers_Original      = nullptr;
+DXGISwap_GetFullscreenState_pfn DXGISwap_GetFullscreenState_Original = nullptr;
+DXGISwap_SetFullscreenState_pfn DXGISwap_SetFullscreenState_Original = nullptr;
 
 
 extern "C" void    WINAPI D3D11_RSSetViewports_Override     ( ID3D11DeviceContext*,
                                                               UINT,
                                                         const D3D11_VIEWPORT* );
-extern "C" HRESULT WINAPI D3D11Dev_CreateTexture2D_Override ( ID3D11Device*,
+extern     HRESULT WINAPI D3D11Dev_CreateTexture2D_Override ( ID3D11Device*,
                                                         const D3D11_TEXTURE2D_DESC*,
                                                         const D3D11_SUBRESOURCE_DATA*,
                                                               ID3D11Texture2D** );
@@ -182,35 +181,42 @@ SK_DS3_PluginKeyPress ( BOOL Control,
                         BYTE vkCode );
 
 
-bmf::ParameterFactory ds3_factory;
+sk::ParameterFactory  ds3_factory;
+                      
+sk::INI::File*        ds3_prefs            = nullptr;
+                      
+sk::ParameterInt*     ds3_hud_res_x        = nullptr;
+sk::ParameterInt*     ds3_hud_res_y        = nullptr;
+sk::ParameterInt*     ds3_hud_offset_x     = nullptr;
+sk::ParameterInt*     ds3_hud_offset_y     = nullptr;
+sk::ParameterBool*    ds3_hud_stretch      = nullptr;
+                      
+sk::ParameterInt*     ds3_default_res_x    = nullptr;
+sk::ParameterInt*     ds3_default_res_y    = nullptr;
+sk::ParameterInt*     ds3_sacrificial_x    = nullptr;
+sk::ParameterInt*     ds3_sacrificial_y    = nullptr;
+                      
+sk::ParameterBool*    ds3_dump_textures    = nullptr;
+sk::ParameterBool*    ds3_inject_textures  = nullptr;
+sk::ParameterBool*    ds3_cache_textures   = nullptr;
+sk::ParameterStringW* ds3_resource_root    = nullptr;
+                      
+sk::ParameterBool*    ds3_fullscreen       = nullptr;
+sk::ParameterBool*    ds3_borderless       = nullptr;
+sk::ParameterBool*    ds3_center           = nullptr;
+                      
+sk::ParameterBool*    ds3_start_fullscreen = nullptr;
+                      
+sk::ParameterBool*    ds3_flip_mode        = nullptr;
 
-bmf::INI::File*       ds3_prefs            = nullptr;
 
-bmf::ParameterInt*    ds3_hud_res_x        = nullptr;
-bmf::ParameterInt*    ds3_hud_res_y        = nullptr;
-bmf::ParameterInt*    ds3_hud_offset_x     = nullptr;
-bmf::ParameterInt*    ds3_hud_offset_y     = nullptr;
-bmf::ParameterBool*   ds3_hud_stretch      = nullptr;
-
-bmf::ParameterInt*    ds3_default_res_x    = nullptr;
-bmf::ParameterInt*    ds3_default_res_y    = nullptr;
-bmf::ParameterInt*    ds3_sacrificial_x    = nullptr;
-bmf::ParameterInt*    ds3_sacrificial_y    = nullptr;
-
-bmf::ParameterBool*   ds3_fullscreen       = nullptr;
-bmf::ParameterBool*   ds3_borderless       = nullptr;
-bmf::ParameterBool*   ds3_center           = nullptr;
-
-bmf::ParameterBool*   ds3_start_fullscreen = nullptr;
-
-bmf::ParameterBool*   ds3_flip_mode        = nullptr;
-
+extern HWND hWndRender;
 
 struct ds3_state_s {
   IDXGISwapChain* SwapChain  = nullptr;
 
   bool            Fullscreen = false;
-  HWND            Window     = 0;
+  HWND&           Window     = hWndRender;
 
   int             Width      = 0;
   int             Height     = 0;
@@ -262,6 +268,13 @@ struct {
     bool fullscreen  = false;
     bool center      = true;
   } window;
+
+  struct {
+    std::wstring res_root = L"SUS_Res";
+    bool         dump     = false;
+    bool         inject   = true;
+    bool         cache    = true;
+  } textures;
 } ds3_cfg;
 
 
@@ -271,8 +284,11 @@ extern void
 __stdcall
 SK_SetPluginName (std::wstring name);
 
-#define SUS_VERSION_NUM L"0.2.1"
+#define SUS_VERSION_NUM L"0.3.0"
 #define SUS_VERSION_STR L"Souls Unsqueezed v " SUS_VERSION_NUM
+
+LPVOID __SK_base_img_addr = nullptr;
+LPVOID __SK_end_img_addr  = nullptr;
 
 void*
 SK_Scan (uint8_t* pattern, size_t len, uint8_t* mask)
@@ -282,12 +298,66 @@ SK_Scan (uint8_t* pattern, size_t len, uint8_t* mask)
   MEMORY_BASIC_INFORMATION mem_info;
   VirtualQuery (base_addr, &mem_info, sizeof mem_info);
 
+  //
+  // VMProtect kills this, so let's do something else...
+  //
+#ifdef VMPROTECT_IS_NOT_A_FACTOR
   IMAGE_DOS_HEADER* pDOS =
     (IMAGE_DOS_HEADER *)mem_info.AllocationBase;
   IMAGE_NT_HEADERS* pNT  =
     (IMAGE_NT_HEADERS *)((intptr_t)(pDOS + pDOS->e_lfanew));
 
   uint8_t* end_addr = base_addr + pNT->OptionalHeader.SizeOfImage;
+#else
+           base_addr = (uint8_t *)mem_info.BaseAddress;//AllocationBase;
+  uint8_t* end_addr  = (uint8_t *)mem_info.BaseAddress + mem_info.RegionSize;
+
+  if (base_addr != (uint8_t *)0x400000) {
+    dll_log.Log ( L"[ Sig Scan ] Expected module base addr. 40000h, but got: %ph",
+                    base_addr );
+  }
+
+  size_t pages = 0;
+
+// Scan up to 256 MiB worth of data
+#ifdef __WIN32
+#define PAGE_WALK_LIMIT (uint8_t *)((base_addr) + (1 << 27))
+#else
+  // Dark Souls 3 needs this, its address space is completely random to the point
+  //   where it may be occupying a range well in excess of 36 bits. Probably a stupid
+  //     anti-cheat attempt.
+#define PAGE_WALK_LIMIT (uint8_t *)MAXULONGLONG
+#endif
+
+  //
+  // For practical purposes, let's just assume that all valid games have less than 32 MiB of
+  //   committed executable image data.
+  //
+  while (VirtualQuery (end_addr, &mem_info, sizeof mem_info) && end_addr < PAGE_WALK_LIMIT) {
+    if (mem_info.Protect & PAGE_NOACCESS || (! (mem_info.Type & MEM_IMAGE)))
+      break;
+
+    pages += VirtualQuery (end_addr, &mem_info, sizeof mem_info);
+
+    end_addr = (uint8_t *)mem_info.BaseAddress + mem_info.RegionSize;
+  } 
+
+  if (end_addr > PAGE_WALK_LIMIT) {
+    dll_log.Log ( L"[ Sig Scan ] Module page walk resulted in end addr. out-of-range: %ph",
+                    end_addr );
+    dll_log.Log ( L"[ Sig Scan ]  >> Restricting to %ph",
+                    PAGE_WALK_LIMIT );
+    end_addr = (uint8_t *)PAGE_WALK_LIMIT;
+  }
+
+  dll_log.Log ( L"[ Sig Scan ] Module image consists of %lu pages, from %ph to %ph",
+                  pages,
+                    base_addr,
+                      end_addr );
+#endif
+
+  __SK_base_img_addr = base_addr;
+  __SK_end_img_addr  = end_addr;
 
   uint8_t*  begin = (uint8_t *)base_addr;
   uint8_t*  it    = begin;
@@ -428,17 +498,19 @@ SK_DS3_GetMonitorDims (void)
 
   return dims;
 }
-void
-SK_DS3_CenterWindow (void)
+
+DWORD
+WINAPI
+SK_DS3_CenterWindow_Thread (LPVOID user)
 {
   SK_DS3_GetMonitorDims ();
 
   if (! sus_state.Center)
-    return;
+    return 0;
 
-  dll_log.Log ( L"[!] SK_DS3_CenterWindow (void) -- [Calling Thread: 0x%04x]",
+  dll_log.Log ( L"[SUS PlugIn] [!] SK_DS3_CenterWindow (void) -- [Calling Thread: 0x%04x]",
                   GetCurrentThreadId () );
-  dll_log.Log ( L"\tMonitor: [%lux%lu] <-> Window: [%lux%lu] :: { %s }, <HWND: 0x%04X>",
+  dll_log.Log ( L"[SUS PlugIn] \tMonitor: [%lux%lu] <-> Window: [%lux%lu] :: { %s }, <HWND: 0x%04X>",
                   ds3_state.monitor.Width, ds3_state.monitor.Height,
                     ds3_state.Width, ds3_state.Height,
                       ds3_state.Fullscreen ? L"Fullscreen" : L"Windowed",
@@ -454,7 +526,7 @@ SK_DS3_CenterWindow (void)
       y_off = (ds3_state.monitor.Height - ds3_state.Height) / 2;
     }
 
-    DWORD dwFlags = SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER;
+    DWORD dwFlags = SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | SWP_ASYNCWINDOWPOS;
 
     //SetActiveWindow_Original (ds3_state.Window);
     BringWindowToTop         (ds3_state.Window);
@@ -467,12 +539,15 @@ SK_DS3_CenterWindow (void)
             dwFlags
     );
   }
+
+  return 0;
 }
 
-void
-SK_DS3_FinishResize (void)
+DWORD
+WINAPI
+SK_DS3_FinishResize_Thread (LPVOID user)
 {
-  DWORD dwFlags = SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSENDCHANGING;
+    DWORD dwFlags = SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSENDCHANGING | SWP_ASYNCWINDOWPOS;
 
   if (ds3_cfg.window.borderless) {
     SetWindowLongW (ds3_state.Window, GWL_STYLE, WS_POPUP | WS_MINIMIZEBOX);
@@ -493,9 +568,28 @@ SK_DS3_FinishResize (void)
   );
 
   //SK_DS3_CenterWindow ();
+
+  return 0;
+}
+
+void
+SK_DS3_FinishResize (void)
+{
+  // It is not safe to do this stuff from the render or message pump thread,
+  //   so always spawn a worker thread to do it. This prevents deadlocks.
+  CreateThread (nullptr, 0, SK_DS3_FinishResize_Thread, nullptr, 0, nullptr);
+}
+
+void
+SK_DS3_CenterWindow (void)
+{
+  // It is not safe to do this stuff from the render or message pump thread,
+  //   so always spawn a worker thread to do it. This prevents deadlocks.
+  CreateThread (nullptr, 0, SK_DS3_CenterWindow_Thread, nullptr, 0, nullptr);
 }
 
 
+#if 0
 int
 WINAPI
 GetSystemMetrics_Detour (_In_ int nIndex)
@@ -536,6 +630,7 @@ GetSystemMetrics_Detour (_In_ int nIndex)
 
   return nRet;
 }
+#endif
 
 BOOL
 WINAPI
@@ -578,7 +673,7 @@ SK_DS3_SetActiveWindow (
 
 
 void
-BMF_DS3_InitPlugin (void)
+SK_DS3_InitPlugin (void)
 {
   SetProcessDPIAware ();
 
@@ -594,7 +689,7 @@ BMF_DS3_InitPlugin (void)
     uint32_t dwLen = MAX_PATH;
     wchar_t  wszGraphicsConfigPath [MAX_PATH];
 
-    BMF_GetUserProfileDir (wszGraphicsConfigPath, &dwLen);
+    SK_GetUserProfileDir (wszGraphicsConfigPath, &dwLen);
 
     wcscat ( wszGraphicsConfigPath,
                L"\\AppData\\Roaming\\DarkSoulsIII\\GraphicsConfig.xml" );
@@ -609,12 +704,12 @@ BMF_DS3_InitPlugin (void)
     std::wstring ds3_prefs_file =
       std::wstring (L"SoulsUnsqueezed.ini");
 
-    ds3_prefs = new bmf::INI::File (ds3_prefs_file.c_str ());
+    ds3_prefs = new sk::INI::File ((wchar_t *)ds3_prefs_file.c_str ());
     ds3_prefs->parse ();
   }
 
   ds3_hud_res_x = 
-      static_cast <bmf::ParameterInt *>
+      static_cast <sk::ParameterInt *>
         (ds3_factory.create_parameter <int> (L"HUDResX"));
   ds3_hud_res_x->register_to_ini ( ds3_prefs,
                                     L"SUS.Display",
@@ -624,7 +719,7 @@ BMF_DS3_InitPlugin (void)
     ds3_cfg.hud.res_x = ds3_hud_res_x->get_value ();
 
   ds3_hud_res_y = 
-      static_cast <bmf::ParameterInt *>
+      static_cast <sk::ParameterInt *>
         (ds3_factory.create_parameter <int> (L"HUDResY"));
   ds3_hud_res_y->register_to_ini ( ds3_prefs,
                                     L"SUS.Display",
@@ -634,7 +729,7 @@ BMF_DS3_InitPlugin (void)
     ds3_cfg.hud.res_y = ds3_hud_res_y->get_value ();
 
   ds3_hud_offset_x = 
-      static_cast <bmf::ParameterInt *>
+      static_cast <sk::ParameterInt *>
         (ds3_factory.create_parameter <int> (L"HUDOffsetX"));
   ds3_hud_offset_x->register_to_ini ( ds3_prefs,
                                         L"SUS.Display",
@@ -644,7 +739,7 @@ BMF_DS3_InitPlugin (void)
     ds3_cfg.hud.offset_x = ds3_hud_offset_x->get_value ();
 
   ds3_hud_offset_y = 
-      static_cast <bmf::ParameterInt *>
+      static_cast <sk::ParameterInt *>
         (ds3_factory.create_parameter <int> (L"HUDOffsetY"));
   ds3_hud_offset_y->register_to_ini ( ds3_prefs,
                                         L"SUS.Display",
@@ -654,7 +749,7 @@ BMF_DS3_InitPlugin (void)
     ds3_cfg.hud.offset_y = ds3_hud_offset_y->get_value ();
 
   ds3_hud_stretch = 
-      static_cast <bmf::ParameterBool *>
+      static_cast <sk::ParameterBool *>
         (ds3_factory.create_parameter <bool> (L"StretchHUD"));
   ds3_hud_stretch->register_to_ini ( ds3_prefs,
                                         L"SUS.Display",
@@ -665,7 +760,7 @@ BMF_DS3_InitPlugin (void)
 
 
   ds3_flip_mode =
-    static_cast <bmf::ParameterBool *>
+    static_cast <sk::ParameterBool *>
       (ds3_factory.create_parameter <bool> (L"FlipMode"));
   ds3_flip_mode->register_to_ini ( ds3_prefs,
                                      L"SUS.Render",
@@ -675,7 +770,7 @@ BMF_DS3_InitPlugin (void)
     ds3_cfg.render.flip_mode = ds3_flip_mode->get_value ();
 
   ds3_start_fullscreen =
-    static_cast <bmf::ParameterBool *>
+    static_cast <sk::ParameterBool *>
       (ds3_factory.create_parameter <bool> (L"Start in Fullscreen"));
   ds3_start_fullscreen->register_to_ini ( ds3_prefs,
                                             L"SUS.Render",
@@ -686,7 +781,7 @@ BMF_DS3_InitPlugin (void)
 
 
   ds3_borderless =
-    static_cast <bmf::ParameterBool *>
+    static_cast <sk::ParameterBool *>
       (ds3_factory.create_parameter <bool> (L"Borderless"));
   ds3_borderless->register_to_ini ( ds3_prefs,
                                       L"SUS.Window",
@@ -697,7 +792,7 @@ BMF_DS3_InitPlugin (void)
 
 
   ds3_fullscreen =
-    static_cast <bmf::ParameterBool *>
+    static_cast <sk::ParameterBool *>
       (ds3_factory.create_parameter <bool> (L"Forceful Fullscreen Windows"));
   ds3_fullscreen->register_to_ini ( ds3_prefs,
                                       L"SUS.Window",
@@ -711,7 +806,7 @@ BMF_DS3_InitPlugin (void)
 
 
   ds3_center =
-    static_cast <bmf::ParameterBool *>
+    static_cast <sk::ParameterBool *>
       (ds3_factory.create_parameter <bool> (L"Center Windows"));
   ds3_center->register_to_ini ( ds3_prefs,
                                   L"SUS.Window",
@@ -724,8 +819,54 @@ BMF_DS3_InitPlugin (void)
   }
 
 
+
+  ds3_dump_textures =
+    static_cast <sk::ParameterBool *>
+    (ds3_factory.create_parameter <bool> (L"Dump Textures"));
+  ds3_dump_textures->register_to_ini ( ds3_prefs,
+                                         L"SUS.Textures",
+                                           L"Dump" );
+
+  if (ds3_dump_textures->load ()) {
+    ds3_cfg.textures.dump = ds3_dump_textures->get_value ();
+  }
+
+  ds3_inject_textures =
+    static_cast <sk::ParameterBool *>
+    (ds3_factory.create_parameter <bool> (L"Inject Textures"));
+  ds3_inject_textures->register_to_ini ( ds3_prefs,
+                                           L"SUS.Textures",
+                                             L"Inject" );
+
+  if (ds3_inject_textures->load ()) {
+    ds3_cfg.textures.inject = ds3_inject_textures->get_value ();
+  }
+
+  ds3_cache_textures =
+    static_cast <sk::ParameterBool *>
+    (ds3_factory.create_parameter <bool> (L"Cache Textures"));
+  ds3_cache_textures->register_to_ini ( ds3_prefs,
+                                         L"SUS.Textures",
+                                           L"Cache" );
+
+  if (ds3_cache_textures->load ()) {
+    ds3_cfg.textures.cache = ds3_cache_textures->get_value ();
+  }
+
+  ds3_resource_root =
+    static_cast <sk::ParameterStringW *>
+    (ds3_factory.create_parameter <bool> (L"Resource Root"));
+  ds3_resource_root->register_to_ini ( ds3_prefs,
+                                         L"SUS.Textures",
+                                           L"ResourceRoot" );
+
+  if (ds3_resource_root->load ()) {
+    ds3_cfg.textures.res_root = ds3_resource_root->get_value ();
+  }
+
+
   ds3_default_res_x =
-    static_cast <bmf::ParameterInt *>
+    static_cast <sk::ParameterInt *>
       (ds3_factory.create_parameter <int> (L"Base (Windowed) Resolution"));
   ds3_default_res_x->register_to_ini ( ds3_prefs,
                                          L"SUS.Render",
@@ -734,7 +875,7 @@ BMF_DS3_InitPlugin (void)
   ds3_default_res_x->load ();
 
   ds3_default_res_y =
-    static_cast <bmf::ParameterInt *>
+    static_cast <sk::ParameterInt *>
       (ds3_factory.create_parameter <int> (L"Base (Windowed) Resolution"));
   ds3_default_res_y->register_to_ini ( ds3_prefs,
                                          L"SUS.Render",
@@ -743,8 +884,21 @@ BMF_DS3_InitPlugin (void)
   ds3_default_res_y->load ();
 
 
+
+  extern void WINAPI SK_D3D11_SetResourceRoot (std::wstring root);
+  extern void WINAPI SK_D3D11_EnableTexDump (bool enable);
+  extern void WINAPI SK_D3D11_EnableTexInject (bool enable);
+  extern void WINAPI SK_D3D11_EnableTexCache (bool enable);
+
+  SK_D3D11_SetResourceRoot (L"SUS_Res");
+  SK_D3D11_EnableTexDump   (true);
+  SK_D3D11_EnableTexInject (true);
+  SK_D3D11_EnableTexCache  (true);
+
+
+
   ds3_sacrificial_x =
-    static_cast <bmf::ParameterInt *>
+    static_cast <sk::ParameterInt *>
     (ds3_factory.create_parameter <int> (L"Sacrificial (Windowed) Resolution"));
   ds3_sacrificial_x->register_to_ini ( ds3_prefs,
                                          L"SUS.Render",
@@ -754,7 +908,7 @@ BMF_DS3_InitPlugin (void)
     ds3_cfg.render.sacrifice_x = ds3_sacrificial_x->get_value ();
 
   ds3_sacrificial_y =
-    static_cast <bmf::ParameterInt *>
+    static_cast <sk::ParameterInt *>
     (ds3_factory.create_parameter <int> (L"Sacrificial (Windowed) Resolution"));
   ds3_sacrificial_y->register_to_ini ( ds3_prefs,
                                          L"SUS.Render",
@@ -786,79 +940,79 @@ BMF_DS3_InitPlugin (void)
     if (res_x != 1920 || res_y != 1080) {
       SK_InjectMemory (res_addr_x, (uint8_t *)&res_x, 4, PAGE_EXECUTE_READWRITE);
       SK_InjectMemory (res_addr_y, (uint8_t *)&res_y, 4, PAGE_EXECUTE_READWRITE);
-      dll_log.Log ( L"[AspectRatio] Custom Default Resolution: (%lux%lu) {%3.2f}",
+      dll_log.Log ( L"[Asp. Ratio] Custom Default Resolution: (%lux%lu) {%3.2f}",
                       res_x, res_y,
                         (float)res_x / (float)res_y );
     }
   } else {
-    dll_log.Log (L"[AspectRatio] >> ERROR: Unable to locate memory address for 1920x1080... <<");
+    dll_log.Log (L"[Asp. Ratio] >> ERROR: Unable to locate memory address for 1920x1080... <<");
   }
 
 #if 0
-  BMF_CreateDLLHook ( L"user32.dll",
+  SK_CreateDLLHook ( L"user32.dll",
                       "GetSystemMetrics",
                        GetSystemMetrics_Detour,
             (LPVOID *)&GetSystemMetrics_Original );
 #endif
 
-  BMF_CreateDLLHook ( L"user32.dll",
-                      "SetWindowPos",
-                       SK_DS3_SetWindowPos,
-            (LPVOID *)&SetWindowPos_Original );
+  SK_CreateDLLHook ( L"user32.dll",
+                     "SetWindowPos",
+                      SK_DS3_SetWindowPos,
+           (LPVOID *)&SetWindowPos_Original );
 
-    BMF_CreateDLLHook ( L"user32.dll",
-                      "SetActiveWindow",
-                       SK_DS3_SetActiveWindow,
-            (LPVOID *)&SetActiveWindow_Original );
+  SK_CreateDLLHook ( L"user32.dll",
+                     "SetActiveWindow",
+                      SK_DS3_SetActiveWindow,
+           (LPVOID *)&SetActiveWindow_Original );
 
-  BMF_CreateFuncHook ( L"ID3D11DeviceContext::RSSetViewports",
-                         D3D11_RSSetViewports_Override,
-                           SK_DS3_RSSetViewports,
-                             (LPVOID *)&D3D11_RSSetViewports_Original );
-  BMF_EnableHook (D3D11_RSSetViewports_Override);
+  SK_CreateFuncHook ( L"ID3D11DeviceContext::RSSetViewports",
+                        D3D11_RSSetViewports_Override,
+                          SK_DS3_RSSetViewports,
+                            (LPVOID *)&D3D11_RSSetViewports_Original );
+  SK_EnableHook (D3D11_RSSetViewports_Override);
 
-  BMF_CreateFuncHook ( L"IDXGISwapChain::ResizeTarget",
-                         DXGISwap_ResizeTarget_Override,
-                           SK_DS3_ResizeTarget,
-                             (LPVOID *)&DXGISwap_ResizeTarget_Original );
-  BMF_EnableHook (DXGISwap_ResizeTarget_Override);
+  SK_CreateFuncHook ( L"IDXGISwapChain::ResizeTarget",
+                        DXGISwap_ResizeTarget_Override,
+                          SK_DS3_ResizeTarget,
+                            (LPVOID *)&DXGISwap_ResizeTarget_Original );
+  SK_EnableHook (DXGISwap_ResizeTarget_Override);
 
-  BMF_CreateFuncHook ( L"IDXGISwapChain::ResizeBuffers",
-                         DXGISwap_ResizeBuffers_Override,
-                           SK_DS3_ResizeBuffers,
-                             (LPVOID *)&DXGISwap_ResizeBuffers_Original );
-  BMF_EnableHook (DXGISwap_ResizeBuffers_Override);
+  SK_CreateFuncHook ( L"IDXGISwapChain::ResizeBuffers",
+                        DXGISwap_ResizeBuffers_Override,
+                          SK_DS3_ResizeBuffers,
+                            (LPVOID *)&DXGISwap_ResizeBuffers_Original );
+  SK_EnableHook (DXGISwap_ResizeBuffers_Override);
 
 
-  BMF_CreateFuncHook ( L"IDXGISwapChain::GetFullscreenState",
-                         DXGISwap_GetFullscreenState_Override,
-                           SK_DS3_GetFullscreenState,
-                             (LPVOID *)&DXGISwap_GetFullscreenState_Original );
-  BMF_EnableHook (DXGISwap_GetFullscreenState_Override);
+  SK_CreateFuncHook ( L"IDXGISwapChain::GetFullscreenState",
+                        DXGISwap_GetFullscreenState_Override,
+                          SK_DS3_GetFullscreenState,
+                            (LPVOID *)&DXGISwap_GetFullscreenState_Original );
+  SK_EnableHook (DXGISwap_GetFullscreenState_Override);
 
-  BMF_CreateFuncHook ( L"IDXGISwapChain::SetFullscreenState",
-                         DXGISwap_SetFullscreenState_Override,
-                           SK_DS3_SetFullscreenState,
-                             (LPVOID *)&DXGISwap_SetFullscreenState_Original );
-  BMF_EnableHook (DXGISwap_SetFullscreenState_Override);
+  SK_CreateFuncHook ( L"IDXGISwapChain::SetFullscreenState",
+                        DXGISwap_SetFullscreenState_Override,
+                          SK_DS3_SetFullscreenState,
+                            (LPVOID *)&DXGISwap_SetFullscreenState_Original );
+  SK_EnableHook (DXGISwap_SetFullscreenState_Override);
 
 
   LPVOID lpvPluginKeyPress = nullptr;
 
-  BMF_CreateFuncHook ( L"SK_PluginKeyPress",
-                         SK_PluginKeyPress,
-                           SK_DS3_PluginKeyPress,
-                             (LPVOID *)&lpvPluginKeyPress );
-  BMF_EnableHook (SK_PluginKeyPress);
+  SK_CreateFuncHook ( L"SK_PluginKeyPress",
+                        SK_PluginKeyPress,
+                          SK_DS3_PluginKeyPress,
+                            (LPVOID *)&lpvPluginKeyPress );
+  SK_EnableHook (SK_PluginKeyPress);
 
 
 
 #if 0
-  BMF_CreateFuncHook ( L"BMF_ShutdownCore",
-                         BMF_ShutdownCore,
+  SK_CreateFuncHook ( L"SK_ShutdownCore",
+                         SK_ShutdownCore,
                            SK_DS3_ShutdownPlugin,
-                             (LPVOID *)&BMF_ShutdownCore_Original );
-  BMF_EnableHook (BMF_ShutdownCore);
+                             (LPVOID *)&SK_ShutdownCore_Original );
+  SK_EnableHook (SK_ShutdownCore);
 #endif
 }
 
@@ -895,7 +1049,7 @@ SK_DS3_CreateTexture2D (
   if ( (rt || depthstencil ) &&
         pDescNew->Width      == 1280 && pDescNew->Height      == 720 && (
       ds3_cfg.hud.res_x != 1280 || ds3_cfg.hud.res_y != 720 ) ) {
-    dll_log.Log (L" >> Rescaling rendertarget from (%lux%lu) to (%lux%lu)",
+    dll_log.Log (L"[SUS PlugIn] >> Rescaling rendertarget from (%lux%lu) to (%lux%lu)",
                     pDescNew->Width, pDescNew->Height,
                     ds3_cfg.hud.res_x, ds3_cfg.hud.res_y);
     hr = 
@@ -906,7 +1060,7 @@ SK_DS3_CreateTexture2D (
         is_16by9 ) {
     dll_log.Log (L" >> Rescaling rendertarget from (%lux%lu) to (%lux%lu)",
                     pDescNew->Width, pDescNew->Height,
-                    3440, 1440);// (), BMF_DS3_GetHUDResY ());
+                    3440, 1440);// (), SK_DS3_GetHUDResY ());
 
     pDescNew->Height = 1440;
     pDescNew->Width  = 3440;
@@ -961,10 +1115,6 @@ SK_DS3_SetFullscreenState (
   _In_ BOOL            Fullscreen,
   _In_ IDXGIOutput    *pTarget )
 {
-  // Hack to handle artificially generated Alt+Enter sequences
-  keybd_event (VK_LMENU,  0, KEYEVENTF_KEYUP, 0);
-  keybd_event (VK_RETURN, 0, KEYEVENTF_KEYUP, 0);
-
   // No need to check if the mode switch actually worked, we're faking it
   if (ds3_cfg.window.borderless)
     ds3_state.Fullscreen = Fullscreen;
@@ -973,7 +1123,7 @@ SK_DS3_SetFullscreenState (
 
   DXGI_SWAP_CHAIN_DESC swap_desc;
   if (SUCCEEDED (This->GetDesc (&swap_desc))) {
-    ds3_state.Window = swap_desc.OutputWindow;
+    //ds3_state.Window = swap_desc.OutputWindow;
 
     DXGI_OUTPUT_DESC out_desc;
 
@@ -1175,7 +1325,7 @@ SK_DS3_RSSetViewports ( ID3D11DeviceContext* This,
 
 
 bool
-BMF_DS3_UseFlipMode (void)
+SK_DS3_UseFlipMode (void)
 {
   return ds3_cfg.render.flip_mode;
 }
@@ -1190,6 +1340,22 @@ SK_DS3_PluginKeyPress ( BOOL Control,
   if (Control && Shift && Alt && vkCode == VK_OEM_PERIOD) {
     ds3_cfg.hud.stretch = (! ds3_cfg.hud.stretch);
   }
+}
+
+DWORD
+WINAPI
+SK_DS3_FullscreenToggle_Thread (LPVOID user)
+{
+  keybd_event (VK_LMENU,  0, KEYEVENTF_EXTENDEDKEY, 0);
+  keybd_event (VK_RETURN, 0, KEYEVENTF_EXTENDEDKEY, 0);
+
+  Sleep (15);
+
+  // Hack to handle artificially generated Alt+Enter sequences
+  keybd_event (VK_RETURN, 0, KEYEVENTF_KEYUP, 0);
+  keybd_event (VK_LMENU,  0, KEYEVENTF_KEYUP, 0);
+
+  return 0;
 }
 
 HRESULT
@@ -1213,8 +1379,7 @@ SK_DS3_PresentFirstFrame ( IDXGISwapChain *This,
     // Engage Fullscreen Mode At Startup (ARC Hack)
     //
     if (ds3_cfg.render.fullscreen) {
-      keybd_event (VK_LMENU,  0, KEYEVENTF_EXTENDEDKEY, 0);
-      keybd_event (VK_RETURN, 0, KEYEVENTF_EXTENDEDKEY, 0);
+      CreateThread (nullptr, 0, SK_DS3_FullscreenToggle_Thread, nullptr, 0, nullptr);
     }
   }
 
@@ -1223,7 +1388,7 @@ SK_DS3_PresentFirstFrame ( IDXGISwapChain *This,
     SK_DS3_CenterWindow ();
   }
 
-  ////DXGISwap_ResizeBuffers_Original (This, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
+  DXGISwap_ResizeBuffers_Original (This, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
 
   return S_OK;
 }
@@ -1245,7 +1410,7 @@ SK_DS3_ShutdownPlugin (const wchar_t* backend)
   uint32_t dwLen = MAX_PATH;
   wchar_t  wszGraphicsConfigPath [MAX_PATH];
 
-  BMF_GetUserProfileDir (wszGraphicsConfigPath, &dwLen);
+  SK_GetUserProfileDir (wszGraphicsConfigPath, &dwLen);
 
   wcscat ( wszGraphicsConfigPath,
              L"\\AppData\\Roaming\\DarkSoulsIII\\GraphicsConfig.xml" );
