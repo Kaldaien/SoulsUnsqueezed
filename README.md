@@ -13,4 +13,4 @@ Avoiding the wrath of anti-cheat means that I cannot modify as many things as I 
 <hr>
 
 **NOTE:** _The code is limited to `plugin_ds3.cpp` because this is an add-on to a much larger project._
->The source code for the parent project is in my [Fallout 4 "Works" repository](https://github.com/Kaldaien/FO4W/). Compiling and distributing that project is complicated and I have not had time to simplify the process. If you wish to contribute to this project, you will have to contact me on Steam and I can walk you through getting that all done.
+>The source code for the parent project is in my [Special K repository](https://github.com/Kaldaien/SpecialK/). Compiling and distributing that project is complicated and I have not had time to simplify the process. If you wish to contribute to this project, you will have to contact me on Steam and I can walk you through getting that all done.
