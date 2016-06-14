@@ -1,4 +1,4 @@
-#include <string> 
+#include <string>
 
 #include "ini.h"
 #include "parameter.h"
@@ -38,7 +38,7 @@ typedef BOOL (WINAPI *SetWindowPos_pfn)(
   _In_     UINT uFlags
 );
 typedef HWND (WINAPI *SetActiveWindow_pfn)(
-  HWND hWnd 
+  HWND hWnd
 );
 
 
@@ -335,8 +335,8 @@ uint8_t* const PAGE_WALK_LIMIT = (base_addr + (uintptr_t)(1ULL << 36));
   //   committed executable image data.
   //
   while (VirtualQuery (end_addr, &mem_info, sizeof mem_info) && end_addr < PAGE_WALK_LIMIT) {
-    if (mem_info.Protect & PAGE_NOACCESS || (! (mem_info.Type & MEM_IMAGE)))
-      break;
+    //if (mem_info.Protect & PAGE_NOACCESS || (! (mem_info.Type & MEM_IMAGE)))
+      //break;
 
     pages += VirtualQuery (end_addr, &mem_info, sizeof mem_info);
 
