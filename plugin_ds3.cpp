@@ -1,3 +1,5 @@
+#define _CRT_SECURE_NO_WARNINGS
+
 #include <string>
 
 #include "ini.h"
@@ -7,6 +9,8 @@
 #include "log.h"
 #include "config.h"
 #include "core.h"
+
+#include <process.h>
 
 //
 // Hook Special K's shutdown function
@@ -82,12 +86,77 @@ typedef HRESULT (STDMETHODCALLTYPE *DXGISwap_SetFullscreenState_pfn)(
     _Out_ IDXGIOutput    *pTarget
 );
 
-D3D11_RSSetViewports_pfn        D3D11_RSSetViewports_Original        = nullptr;
+typedef enum D3DX11_IMAGE_FILE_FORMAT { 
+  D3DX11_IFF_BMP          = 0,
+  D3DX11_IFF_JPG          = 1,
+  D3DX11_IFF_PNG          = 3,
+  D3DX11_IFF_DDS          = 4,
+  D3DX11_IFF_TIFF         = 10,
+  D3DX11_IFF_GIF          = 11,
+  D3DX11_IFF_WMP          = 12,
+  D3DX11_IFF_FORCE_DWORD  = 0x7fffffff
+} D3DX11_IMAGE_FILE_FORMAT, *LPD3DX11_IMAGE_FILE_FORMAT;
 
-DXGISwap_ResizeTarget_pfn       DXGISwap_ResizeTarget_Original       = nullptr;
-DXGISwap_ResizeBuffers_pfn      DXGISwap_ResizeBuffers_Original      = nullptr;
-DXGISwap_GetFullscreenState_pfn DXGISwap_GetFullscreenState_Original = nullptr;
-DXGISwap_SetFullscreenState_pfn DXGISwap_SetFullscreenState_Original = nullptr;
+typedef HRESULT (WINAPI *D3DX11SaveTextureToFileW_pfn)(
+       ID3D11DeviceContext      *pContext,
+  _In_ ID3D11Resource           *pSrcTexture,
+  _In_ D3DX11_IMAGE_FILE_FORMAT DestFormat,
+  _In_ LPCWSTR                  pDestFile
+);
+
+typedef struct D3DX11_IMAGE_INFO {
+  UINT                     Width;
+  UINT                     Height;
+  UINT                     Depth;
+  UINT                     ArraySize;
+  UINT                     MipLevels;
+  UINT                     MiscFlags;
+  DXGI_FORMAT              Format;
+  D3D11_RESOURCE_DIMENSION ResourceDimension;
+  D3DX11_IMAGE_FILE_FORMAT ImageFileFormat;
+} D3DX11_IMAGE_INFO, *LPD3DX11_IMAGE_INFO;
+
+typedef struct D3DX11_IMAGE_LOAD_INFO {
+  UINT              Width;
+  UINT              Height;
+  UINT              Depth;
+  UINT              FirstMipLevel;
+  UINT              MipLevels;
+  D3D11_USAGE       Usage;
+  UINT              BindFlags;
+  UINT              CpuAccessFlags;
+  UINT              MiscFlags;
+  DXGI_FORMAT       Format;
+  UINT              Filter;
+  UINT              MipFilter;
+  D3DX11_IMAGE_INFO *pSrcInfo;
+} D3DX11_IMAGE_LOAD_INFO, *LPD3DX11_IMAGE_LOAD_INFO;
+
+interface ID3DX11ThreadPump;
+
+typedef HRESULT (WINAPI *D3DX11CreateTextureFromMemory_pfn)(
+  _In_  ID3D11Device           *pDevice,
+  _In_  LPCVOID                pSrcData,
+  _In_  SIZE_T                 SrcDataSize,
+  _In_  D3DX11_IMAGE_LOAD_INFO *pLoadInfo,
+  _In_  ID3DX11ThreadPump      *pPump,
+  _Out_ ID3D11Resource         **ppTexture,
+  _Out_ HRESULT                *pHResult
+);
+
+D3D11_RSSetViewports_pfn          D3D11_RSSetViewports_Original          = nullptr;
+
+DXGISwap_ResizeTarget_pfn         DXGISwap_ResizeTarget_Original         = nullptr;
+DXGISwap_ResizeBuffers_pfn        DXGISwap_ResizeBuffers_Original        = nullptr;
+DXGISwap_GetFullscreenState_pfn   DXGISwap_GetFullscreenState_Original   = nullptr;
+DXGISwap_SetFullscreenState_pfn   DXGISwap_SetFullscreenState_Original   = nullptr;
+
+static
+D3DX11CreateTextureFromMemory_pfn D3DX11CreateTextureFromMemory_Original = nullptr;
+
+static
+D3DX11SaveTextureToFileW_pfn      D3DX11SaveTextureToFileW_Original = nullptr;
+
 
 
 extern "C" void    WINAPI D3D11_RSSetViewports_Override     ( ID3D11DeviceContext*,
@@ -181,32 +250,50 @@ SK_DS3_PluginKeyPress ( BOOL Control,
                         BYTE vkCode );
 
 
+HRESULT
+WINAPI
+SK_DS3_D3DX11CreateTextureFromMemory (
+  _In_  ID3D11Device           *pDevice,
+  _In_  LPCVOID                pSrcData,
+  _In_  SIZE_T                 SrcDataSize,
+  _In_  D3DX11_IMAGE_LOAD_INFO *pLoadInfo,
+  _In_  ID3DX11ThreadPump      *pPump,
+  _Out_ ID3D11Resource         **ppTexture,
+  _Out_ HRESULT                *pHResult
+);
+
+HRESULT
+WINAPI
+SK_DS3_D3DX11SaveTextureToFileW (
+       ID3D11DeviceContext      *pContext,
+  _In_ ID3D11Resource           *pSrcTexture,
+  _In_ D3DX11_IMAGE_FILE_FORMAT DestFormat,
+  _In_ LPCTSTR                  pDestFile
+);
+
+
+
 sk::ParameterFactory  ds3_factory;
-                      
+
 sk::INI::File*        ds3_prefs            = nullptr;
-                      
+
 sk::ParameterInt*     ds3_hud_res_x        = nullptr;
 sk::ParameterInt*     ds3_hud_res_y        = nullptr;
 sk::ParameterInt*     ds3_hud_offset_x     = nullptr;
 sk::ParameterInt*     ds3_hud_offset_y     = nullptr;
 sk::ParameterBool*    ds3_hud_stretch      = nullptr;
-                      
+
 sk::ParameterInt*     ds3_default_res_x    = nullptr;
 sk::ParameterInt*     ds3_default_res_y    = nullptr;
 sk::ParameterInt*     ds3_sacrificial_x    = nullptr;
 sk::ParameterInt*     ds3_sacrificial_y    = nullptr;
-                      
-sk::ParameterBool*    ds3_dump_textures    = nullptr;
-sk::ParameterBool*    ds3_inject_textures  = nullptr;
-sk::ParameterBool*    ds3_cache_textures   = nullptr;
-sk::ParameterStringW* ds3_resource_root    = nullptr;
-                      
+
 sk::ParameterBool*    ds3_fullscreen       = nullptr;
 sk::ParameterBool*    ds3_borderless       = nullptr;
 sk::ParameterBool*    ds3_center           = nullptr;
-                      
+
 sk::ParameterBool*    ds3_start_fullscreen = nullptr;
-                      
+
 sk::ParameterBool*    ds3_flip_mode        = nullptr;
 
 sk::ParameterInt64*   ds3_last_addr        = nullptr;
@@ -269,13 +356,6 @@ struct {
     bool fullscreen  = false;
     bool center      = true;
   } window;
-
-  struct {
-    std::wstring res_root = L"SUS_Res";
-    bool         dump     = false;
-    bool         inject   = true;
-    bool         cache    = true;
-  } textures;
 } ds3_cfg;
 
 
@@ -285,7 +365,7 @@ extern void
 __stdcall
 SK_SetPluginName (std::wstring name);
 
-#define SUS_VERSION_NUM L"0.3.2"
+#define SUS_VERSION_NUM L"0.3.4"
 #define SUS_VERSION_STR L"Souls Unsqueezed v " SUS_VERSION_NUM
 
 LPVOID __SK_base_img_addr = nullptr;
@@ -306,7 +386,7 @@ SK_Scan (uint8_t* pattern, size_t len, uint8_t* mask)
   IMAGE_DOS_HEADER* pDOS =
     (IMAGE_DOS_HEADER *)mem_info.AllocationBase;
   IMAGE_NT_HEADERS* pNT  =
-    (IMAGE_NT_HEADERS *)((intptr_t)(pDOS + pDOS->e_lfanew));
+    (IMAGE_NT_HEADERS *)((uintptr_t)(pDOS + pDOS->e_lfanew));
 
   uint8_t* end_addr = base_addr + pNT->OptionalHeader.SizeOfImage;
 #else
@@ -500,8 +580,8 @@ SK_DS3_GetMonitorDims (void)
   return dims;
 }
 
-DWORD
-WINAPI
+unsigned int
+__stdcall
 SK_DS3_CenterWindow_Thread (LPVOID user)
 {
   SK_DS3_GetMonitorDims ();
@@ -540,11 +620,12 @@ SK_DS3_CenterWindow_Thread (LPVOID user)
     );
   }
 
+  _endthread ();
   return 0;
 }
 
-DWORD
-WINAPI
+unsigned int
+__stdcall
 SK_DS3_FinishResize_Thread (LPVOID user)
 {
   DWORD dwFlags = SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSENDCHANGING;
@@ -568,6 +649,7 @@ SK_DS3_FinishResize_Thread (LPVOID user)
 
   //SK_DS3_CenterWindow ();
 
+  _endthread ();
   return 0;
 }
 
@@ -576,7 +658,12 @@ SK_DS3_FinishResize (void)
 {
   // It is not safe to do this stuff from the render or message pump thread,
   //   so always spawn a worker thread to do it. This prevents deadlocks.
-  CreateThread (nullptr, 0, SK_DS3_FinishResize_Thread, nullptr, 0, nullptr);
+  _beginthreadex ( nullptr,
+                    0,
+                      SK_DS3_FinishResize_Thread,
+                        nullptr,
+                          0x00,
+                            nullptr );
 }
 
 void
@@ -584,7 +671,12 @@ SK_DS3_CenterWindow (void)
 {
   // It is not safe to do this stuff from the render or message pump thread,
   //   so always spawn a worker thread to do it. This prevents deadlocks.
-  CreateThread (nullptr, 0, SK_DS3_CenterWindow_Thread, nullptr, 0, nullptr);
+  _beginthreadex ( nullptr,
+                    0,
+                      SK_DS3_CenterWindow_Thread,
+                        nullptr,
+                          0x00,
+                            nullptr );
 }
 
 
@@ -674,8 +766,6 @@ SK_DS3_SetActiveWindow (
 void
 SK_DS3_InitPlugin (void)
 {
-  SetProcessDPIAware ();
-
   __DS3_WIDTH  = &ds3_state.Width;
   __DS3_HEIGHT = &ds3_state.Height;
 
@@ -835,51 +925,6 @@ SK_DS3_InitPlugin (void)
                                        L"Version" );
 #endif
 
-  ds3_dump_textures =
-    static_cast <sk::ParameterBool *>
-    (ds3_factory.create_parameter <bool> (L"Dump Textures"));
-  ds3_dump_textures->register_to_ini ( ds3_prefs,
-                                         L"SUS.Textures",
-                                           L"Dump" );
-
-  if (ds3_dump_textures->load ()) {
-    ds3_cfg.textures.dump = ds3_dump_textures->get_value ();
-  }
-
-  ds3_inject_textures =
-    static_cast <sk::ParameterBool *>
-    (ds3_factory.create_parameter <bool> (L"Inject Textures"));
-  ds3_inject_textures->register_to_ini ( ds3_prefs,
-                                           L"SUS.Textures",
-                                             L"Inject" );
-
-  if (ds3_inject_textures->load ()) {
-    ds3_cfg.textures.inject = ds3_inject_textures->get_value ();
-  }
-
-  ds3_cache_textures =
-    static_cast <sk::ParameterBool *>
-    (ds3_factory.create_parameter <bool> (L"Cache Textures"));
-  ds3_cache_textures->register_to_ini ( ds3_prefs,
-                                         L"SUS.Textures",
-                                           L"Cache" );
-
-  if (ds3_cache_textures->load ()) {
-    ds3_cfg.textures.cache = ds3_cache_textures->get_value ();
-  }
-
-  ds3_resource_root =
-    static_cast <sk::ParameterStringW *>
-    (ds3_factory.create_parameter <std::wstring> (L"Resource Root"));
-  ds3_resource_root->register_to_ini ( ds3_prefs,
-                                         L"SUS.Textures",
-                                           L"ResourceRoot" );
-
-  if (ds3_resource_root->load ()) {
-    ds3_cfg.textures.res_root = ds3_resource_root->get_value ();
-  }
-
-
   ds3_default_res_x =
     static_cast <sk::ParameterInt *>
       (ds3_factory.create_parameter <int> (L"Base (Windowed) Resolution"));
@@ -897,19 +942,6 @@ SK_DS3_InitPlugin (void)
                                            L"DefaultResY" );
 
   ds3_default_res_y->load ();
-
-
-
-  extern void WINAPI SK_D3D11_SetResourceRoot (std::wstring root);
-  extern void WINAPI SK_D3D11_EnableTexDump (bool enable);
-  extern void WINAPI SK_D3D11_EnableTexInject (bool enable);
-  extern void WINAPI SK_D3D11_EnableTexCache (bool enable);
-
-  SK_D3D11_SetResourceRoot (ds3_cfg.textures.res_root);
-  SK_D3D11_EnableTexDump   (ds3_cfg.textures.dump);
-  SK_D3D11_EnableTexInject (ds3_cfg.textures.inject);
-  SK_D3D11_EnableTexCache  (ds3_cfg.textures.cache);
-
 
 
   ds3_sacrificial_x =
@@ -1048,6 +1080,17 @@ SK_DS3_InitPlugin (void)
   SK_EnableHook (SK_PluginKeyPress);
 
 
+  SK_CreateDLLHook ( L"D3DX11_43.DLL",
+                     "D3DX11CreateTextureFromMemory",
+                     SK_DS3_D3DX11CreateTextureFromMemory,
+          (LPVOID *)&D3DX11CreateTextureFromMemory_Original );
+
+  SK_CreateDLLHook ( L"D3DX11_43.DLL",
+                     "D3DX11SaveTextureToFileW",
+                     SK_DS3_D3DX11SaveTextureToFileW,
+          (LPVOID *)&D3DX11SaveTextureToFileW_Original );
+
+
 
 #if 0
   SK_CreateFuncHook ( L"SK_ShutdownCore",
@@ -1166,8 +1209,6 @@ SK_DS3_SetFullscreenState (
   DXGI_SWAP_CHAIN_DESC swap_desc;
   if (SUCCEEDED (This->GetDesc (&swap_desc))) {
     //ds3_state.Window = swap_desc.OutputWindow;
-
-    DXGI_OUTPUT_DESC out_desc;
 
     // Reset the temporary monitor mode change we may have made earlier
     if ((! ds3_state.Fullscreen) && ds3_cfg.window.borderless && sus_state.MaxWindow)
@@ -1384,8 +1425,8 @@ SK_DS3_PluginKeyPress ( BOOL Control,
   }
 }
 
-DWORD
-WINAPI
+unsigned int
+__stdcall
 SK_DS3_FullscreenToggle_Thread (LPVOID user)
 {
   // Don't do any of this stuff if we cannot bring the window into foucs
@@ -1425,6 +1466,8 @@ SK_DS3_FullscreenToggle_Thread (LPVOID user)
   keys [1].ki.wScan = 0x38;
   SendInput (1, &keys [1], sizeof INPUT);
 
+  _endthread ();
+
   return 0;
 }
 
@@ -1454,7 +1497,12 @@ SK_DS3_PresentFirstFrame ( IDXGISwapChain *This,
     // Engage Fullscreen Mode At Startup (ARC Hack)
     //
     if (ds3_cfg.render.fullscreen) {
-      CreateThread (nullptr, 0, SK_DS3_FullscreenToggle_Thread, nullptr, 0, nullptr);
+      _beginthreadex ( nullptr,
+                         0,
+                           SK_DS3_FullscreenToggle_Thread,
+                             nullptr,
+                               0x00,
+                                 nullptr );
     }
   }
 
@@ -1493,4 +1541,50 @@ SK_DS3_ShutdownPlugin (const wchar_t* backend)
 
   return true;
 }
+}
+
+
+HRESULT
+WINAPI
+SK_DS3_D3DX11CreateTextureFromMemory (
+  _In_  ID3D11Device           *pDevice,
+  _In_  LPCVOID                pSrcData,
+  _In_  SIZE_T                 SrcDataSize,
+  _In_  D3DX11_IMAGE_LOAD_INFO *pLoadInfo,
+  _In_  ID3DX11ThreadPump      *pPump,
+  _Out_ ID3D11Resource         **ppTexture,
+  _Out_ HRESULT                *pHResult
+)
+{
+  dll_log.Log (L"[ ... ] D3DX11CreateTextureFromMemory (...)");
+
+  return
+    D3DX11CreateTextureFromMemory_Original (
+      pDevice,
+        pSrcData,
+          SrcDataSize,
+            pLoadInfo,
+              pPump,
+                ppTexture,
+                  pHResult );
+}
+
+HRESULT
+WINAPI
+SK_DS3_D3DX11SaveTextureToFileW (
+       ID3D11DeviceContext      *pContext,
+  _In_ ID3D11Resource           *pSrcTexture,
+  _In_ D3DX11_IMAGE_FILE_FORMAT DestFormat,
+  _In_ LPCWSTR                  pDestFile
+)
+{
+  dll_log.Log ( L"[ ... ] D3DX11SaveTextureToFileW (..., %s)",
+                 pDestFile );
+
+  return
+    D3DX11SaveTextureToFileW_Original (
+      pContext,
+        pSrcTexture,
+          DestFormat,
+            pDestFile );
 }
