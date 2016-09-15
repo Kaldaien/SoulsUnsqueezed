@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include <Windows.h>
 #include "ini.h"
 #include "parameter.h"
 #include "utility.h"
@@ -144,7 +145,7 @@ typedef HRESULT (WINAPI *D3DX11CreateTextureFromMemory_pfn)(
   _Out_ HRESULT                *pHResult
 );
 
-D3D11_RSSetViewports_pfn          D3D11_RSSetViewports_Original          = nullptr;
+static D3D11_RSSetViewports_pfn   D3D11_RSSetViewports_Original          = nullptr;
 
 DXGISwap_ResizeTarget_pfn         DXGISwap_ResizeTarget_Original         = nullptr;
 DXGISwap_ResizeBuffers_pfn        DXGISwap_ResizeBuffers_Original        = nullptr;
@@ -159,7 +160,7 @@ D3DX11SaveTextureToFileW_pfn      D3DX11SaveTextureToFileW_Original = nullptr;
 
 
 
-extern "C" void    WINAPI D3D11_RSSetViewports_Override     ( ID3D11DeviceContext*,
+extern     void    WINAPI D3D11_RSSetViewports_Override     ( ID3D11DeviceContext*,
                                                               UINT,
                                                         const D3D11_VIEWPORT* );
 extern     HRESULT WINAPI D3D11Dev_CreateTexture2D_Override ( ID3D11Device*,
@@ -275,7 +276,7 @@ SK_DS3_D3DX11SaveTextureToFileW (
 
 sk::ParameterFactory  ds3_factory;
 
-sk::INI::File*        ds3_prefs            = nullptr;
+iSK_INI*              ds3_prefs            = nullptr;
 
 sk::ParameterInt*     ds3_hud_res_x        = nullptr;
 sk::ParameterInt*     ds3_hud_res_y        = nullptr;
@@ -365,7 +366,7 @@ extern void
 __stdcall
 SK_SetPluginName (std::wstring name);
 
-#define SUS_VERSION_NUM L"0.3.4"
+#define SUS_VERSION_NUM L"0.3.5"
 #define SUS_VERSION_STR L"Souls Unsqueezed v " SUS_VERSION_NUM
 
 LPVOID __SK_base_img_addr = nullptr;
@@ -620,7 +621,6 @@ SK_DS3_CenterWindow_Thread (LPVOID user)
     );
   }
 
-  _endthread ();
   return 0;
 }
 
@@ -649,7 +649,6 @@ SK_DS3_FinishResize_Thread (LPVOID user)
 
   //SK_DS3_CenterWindow ();
 
-  _endthread ();
   return 0;
 }
 
@@ -764,8 +763,44 @@ SK_DS3_SetActiveWindow (
 
 
 void
+SK_DisableDPIScaling (void)
+{
+  DWORD   dwProcessSize = MAX_PATH;
+  wchar_t wszProcessName [MAX_PATH];
+
+  HANDLE hProc =
+   GetCurrentProcess ();
+
+  QueryFullProcessImageName (hProc, 0, wszProcessName, &dwProcessSize);
+
+  DWORD dwDisposition = 0x00;
+  HKEY  key           = nullptr;
+
+  wchar_t wszKey [1024];
+  lstrcpyW (wszKey, L"Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers");
+
+  LSTATUS status =
+    RegCreateKeyExW ( HKEY_CURRENT_USER,
+                        wszKey,
+                          0, NULL, 0x00L,
+                            KEY_READ | KEY_WRITE,
+                               nullptr, &key, &dwDisposition );
+
+  if (status == ERROR_SUCCESS && key != nullptr) {
+    const wchar_t* wszKillDPI = L"~ HIGHDPIAWARE";
+
+    RegSetValueExW (key, wszProcessName,  0, REG_SZ, (BYTE *)wszKillDPI, sizeof (wchar_t) * (lstrlenW (wszKillDPI) + 1));
+
+    RegFlushKey (key);
+    RegCloseKey (key);
+  }
+}
+
+void
 SK_DS3_InitPlugin (void)
 {
+  SK_DisableDPIScaling ();
+
   __DS3_WIDTH  = &ds3_state.Width;
   __DS3_HEIGHT = &ds3_state.Height;
 
@@ -791,9 +826,9 @@ SK_DS3_InitPlugin (void)
     SK_SetPluginName (SUS_VERSION_STR);
 
     std::wstring ds3_prefs_file =
-      std::wstring (L"SoulsUnsqueezed.ini");
+      SK_GetConfigPath () + L"SoulsUnsqueezed.ini";
 
-    ds3_prefs = new sk::INI::File ((wchar_t *)ds3_prefs_file.c_str ());
+    ds3_prefs = new iSK_INI ((wchar_t *)ds3_prefs_file.c_str ());
     ds3_prefs->parse ();
   }
 
@@ -1002,7 +1037,10 @@ SK_DS3_InitPlugin (void)
   if (res_addr != nullptr) {
     ds3_last_addr->set_value ((int64_t)res_addr);
     ds3_last_addr->store     ();
-    ds3_prefs->write (L"SoulsUnsqueezed.ini");
+
+    ds3_prefs->write (
+      SK_GetConfigPath () + L"SoulsUnsqueezed.ini" 
+    );
   }
 
   void* res_addr_x = res_addr;
@@ -1023,52 +1061,52 @@ SK_DS3_InitPlugin (void)
   }
 
 #if 0
-  SK_CreateDLLHook ( L"user32.dll",
+  SK_CreateDLLHook2 ( L"user32.dll",
                       "GetSystemMetrics",
                        GetSystemMetrics_Detour,
             (LPVOID *)&GetSystemMetrics_Original );
 #endif
 
-  SK_CreateDLLHook ( L"user32.dll",
-                     "SetWindowPos",
-                      SK_DS3_SetWindowPos,
-           (LPVOID *)&SetWindowPos_Original );
+  SK_CreateDLLHook2 ( L"user32.dll",
+                      "SetWindowPos",
+                       SK_DS3_SetWindowPos,
+            (LPVOID *)&SetWindowPos_Original );
 
-  SK_CreateDLLHook ( L"user32.dll",
-                     "SetActiveWindow",
-                      SK_DS3_SetActiveWindow,
-           (LPVOID *)&SetActiveWindow_Original );
+  SK_CreateDLLHook2 ( L"user32.dll",
+                      "SetActiveWindow",
+                       SK_DS3_SetActiveWindow,
+            (LPVOID *)&SetActiveWindow_Original );
 
   SK_CreateFuncHook ( L"ID3D11DeviceContext::RSSetViewports",
                         D3D11_RSSetViewports_Override,
                           SK_DS3_RSSetViewports,
                             (LPVOID *)&D3D11_RSSetViewports_Original );
-  SK_EnableHook (D3D11_RSSetViewports_Override);
+  MH_QueueEnableHook (D3D11_RSSetViewports_Override);
 
   SK_CreateFuncHook ( L"IDXGISwapChain::ResizeTarget",
                         DXGISwap_ResizeTarget_Override,
                           SK_DS3_ResizeTarget,
                             (LPVOID *)&DXGISwap_ResizeTarget_Original );
-  SK_EnableHook (DXGISwap_ResizeTarget_Override);
+  MH_QueueEnableHook (DXGISwap_ResizeTarget_Override);
 
   SK_CreateFuncHook ( L"IDXGISwapChain::ResizeBuffers",
                         DXGISwap_ResizeBuffers_Override,
                           SK_DS3_ResizeBuffers,
                             (LPVOID *)&DXGISwap_ResizeBuffers_Original );
-  SK_EnableHook (DXGISwap_ResizeBuffers_Override);
+  MH_QueueEnableHook (DXGISwap_ResizeBuffers_Override);
 
 
   SK_CreateFuncHook ( L"IDXGISwapChain::GetFullscreenState",
                         DXGISwap_GetFullscreenState_Override,
                           SK_DS3_GetFullscreenState,
                             (LPVOID *)&DXGISwap_GetFullscreenState_Original );
-  SK_EnableHook (DXGISwap_GetFullscreenState_Override);
+  MH_QueueEnableHook (DXGISwap_GetFullscreenState_Override);
 
   SK_CreateFuncHook ( L"IDXGISwapChain::SetFullscreenState",
                         DXGISwap_SetFullscreenState_Override,
                           SK_DS3_SetFullscreenState,
                             (LPVOID *)&DXGISwap_SetFullscreenState_Original );
-  SK_EnableHook (DXGISwap_SetFullscreenState_Override);
+  MH_QueueEnableHook (DXGISwap_SetFullscreenState_Override);
 
 
   LPVOID lpvPluginKeyPress = nullptr;
@@ -1077,15 +1115,15 @@ SK_DS3_InitPlugin (void)
                         SK_PluginKeyPress,
                           SK_DS3_PluginKeyPress,
                             (LPVOID *)&lpvPluginKeyPress );
-  SK_EnableHook (SK_PluginKeyPress);
+  MH_QueueEnableHook (SK_PluginKeyPress);
 
 
-  SK_CreateDLLHook ( L"D3DX11_43.DLL",
+  SK_CreateDLLHook2 ( L"D3DX11_43.DLL",
                      "D3DX11CreateTextureFromMemory",
                      SK_DS3_D3DX11CreateTextureFromMemory,
           (LPVOID *)&D3DX11CreateTextureFromMemory_Original );
 
-  SK_CreateDLLHook ( L"D3DX11_43.DLL",
+  SK_CreateDLLHook2 ( L"D3DX11_43.DLL",
                      "D3DX11SaveTextureToFileW",
                      SK_DS3_D3DX11SaveTextureToFileW,
           (LPVOID *)&D3DX11SaveTextureToFileW_Original );
@@ -1097,8 +1135,10 @@ SK_DS3_InitPlugin (void)
                          SK_ShutdownCore,
                            SK_DS3_ShutdownPlugin,
                              (LPVOID *)&SK_ShutdownCore_Original );
-  SK_EnableHook (SK_ShutdownCore);
+  MH_QueueEnableHook (SK_ShutdownCore);
 #endif
+
+  MH_ApplyQueued ();
 }
 
 
@@ -1214,6 +1254,14 @@ SK_DS3_SetFullscreenState (
     if ((! ds3_state.Fullscreen) && ds3_cfg.window.borderless && sus_state.MaxWindow)
       ChangeDisplaySettings (0, CDS_RESET);
 
+    int num_monitors = GetSystemMetrics (SM_CMONITORS);
+    int virtual_x    = GetSystemMetrics (SM_CXVIRTUALSCREEN);
+    int virtual_y    = GetSystemMetrics (SM_CYVIRTUALSCREEN);
+
+    dll_log.Log ( L"[ Monitors ]  + Display Topology: %lu Monitors - "
+                                      L"(Virtual Res: %lux%lu)",
+                    num_monitors, virtual_x, virtual_y );
+
     if (ds3_cfg.window.borderless && sus_state.MaxWindow) {
       DEVMODE devmode = { 0 };
       devmode.dmSize = sizeof DEVMODE;
@@ -1224,13 +1272,25 @@ SK_DS3_SetFullscreenState (
       //
       //  XXX: Later on, we can restore the game's usual viewport hackery.
       if (ds3_state.Fullscreen) {
-        if (devmode.dmPelsHeight != swap_desc.BufferDesc.Height ||
-            devmode.dmPelsWidth  != swap_desc.BufferDesc.Width) {
+        bool multi_mon_match = ( swap_desc.BufferDesc.Width  == virtual_x &&
+                                 swap_desc.BufferDesc.Height == virtual_y );
+
+        //
+        // This logic really only works correctly on single-monitor setups,
+        //   or setups where the additional monitors are not meant for rendering.
+        //
+        if ( (! multi_mon_match) && ( devmode.dmPelsHeight != swap_desc.BufferDesc.Height ||
+                                      devmode.dmPelsWidth  != swap_desc.BufferDesc.Width ) ) {
           devmode.dmPelsWidth  = swap_desc.BufferDesc.Width;
           devmode.dmPelsHeight = swap_desc.BufferDesc.Height;
 
           ChangeDisplaySettings (&devmode, CDS_FULLSCREEN);
 
+          ds3_state.monitor.Width  = swap_desc.BufferDesc.Width;
+          ds3_state.monitor.Height = swap_desc.BufferDesc.Height;
+        }
+
+        else if (multi_mon_match) {
           ds3_state.monitor.Width  = swap_desc.BufferDesc.Width;
           ds3_state.monitor.Height = swap_desc.BufferDesc.Height;
         }
@@ -1466,8 +1526,6 @@ SK_DS3_FullscreenToggle_Thread (LPVOID user)
   keys [1].ki.wScan = 0x38;
   SendInput (1, &keys [1], sizeof INPUT);
 
-  _endthread ();
-
   return 0;
 }
 
@@ -1506,7 +1564,7 @@ SK_DS3_PresentFirstFrame ( IDXGISwapChain *This,
     }
   }
 
-  DXGISwap_ResizeBuffers_Original (This, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
+  //DXGISwap_ResizeBuffers_Original (This, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
 
   return S_OK;
 }
